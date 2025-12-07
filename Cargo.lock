@@ -1954,6 +1954,7 @@ dependencies = [
  "flexi_logger",
  "genai",
  "log",
+ "serde_json",
  "teloxide",
  "tiktoken-rs",
  "tokio",

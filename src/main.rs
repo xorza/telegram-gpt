@@ -3,7 +3,8 @@ mod typing;
 
 use conversation::{Conversation, TokenCounter};
 use flexi_logger::{Cleanup, Criterion, Duplicate, FileSpec, Logger, Naming};
-use genai::{Client, chat::ChatRequest};
+use genai::{Client, chat::ChatRequest, chat::Tool};
+use serde_json::json;
 use std::{collections::HashMap, sync::Arc};
 use teloxide::{
     prelude::*,
@@ -90,11 +91,7 @@ async fn main() -> Result<(), DynError> {
                     }
                     Err(err) => {
                         log::error!("failed to get llm response: {err}");
-                        bot.send_message(
-                            chat_id,
-                            "I couldn't reach the language model. Please try again.",
-                        )
-                        .await?;
+
                         if let Err(reaction_err) = bot
                             .set_message_reaction(chat_id, message_id)
                             .reaction(vec![ReactionType::Emoji {
@@ -136,6 +133,14 @@ async fn send_to_llm(
     model: &str,
     chat_request: ChatRequest,
 ) -> Result<String, DynError> {
+    let search_tool = Tool::new("web_search").with_config(json!({
+        "user_location": {
+            "type": "approximate",
+            "country": "US"
+        }
+    }));
+
+    let chat_request = chat_request.with_tools(vec![search_tool]);
     let chat_res = client.exec_chat(model, chat_request, None).await?;
 
     let answer = chat_res
