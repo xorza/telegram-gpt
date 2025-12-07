@@ -9,10 +9,14 @@ use std::{
 };
 use teloxide::{
     prelude::*,
-    types::{ChatId, Message},
+    types::{ChatAction, ChatId, Message, ReactionType},
 };
-use tiktoken_rs::{CoreBPE, get_bpe_from_model, o200k_base};
-use tokio::sync::Mutex;
+use tiktoken_rs::{CoreBPE, cl100k_base, get_bpe_from_model};
+use tokio::{
+    sync::Mutex,
+    task::JoinHandle,
+    time::{Duration, sleep},
+};
 
 type DynError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -62,6 +66,8 @@ async fn main() -> Result<(), DynError> {
             if let Some(text) = msg.text() {
                 let user_text = text.to_owned();
                 let chat_id = msg.chat.id;
+                let message_id = msg.id;
+                let typing_guard = TypingIndicator::new(bot.clone(), chat_id);
                 let (chat_request, turn_id, prompt_tokens) = {
                     let mut conv_map = conversations.lock().await;
                     let conversation = conv_map
@@ -75,7 +81,10 @@ async fn main() -> Result<(), DynError> {
                 };
                 log::debug!("chat {chat_id} prompt tokens: {prompt_tokens}/{max_prompt_tokens}");
 
-                match send_to_llm(&client, &model, chat_request).await {
+                let llm_result = send_to_llm(&client, &model, chat_request).await;
+                drop(typing_guard);
+
+                match llm_result {
                     Ok(answer) => {
                         bot.send_message(chat_id, answer.clone()).await?;
                         let mut conv_map = conversations.lock().await;
@@ -92,6 +101,17 @@ async fn main() -> Result<(), DynError> {
                             "I couldn't reach the language model. Please try again.",
                         )
                         .await?;
+                        if let Err(reaction_err) = bot
+                            .set_message_reaction(chat_id, message_id)
+                            .reaction(vec![ReactionType::Emoji {
+                                emoji: "⚠️".to_string(),
+                            }])
+                            .await
+                        {
+                            log::warn!(
+                                "failed to set failure reaction for chat {chat_id}: {reaction_err}"
+                            );
+                        }
                         let mut conv_map = conversations.lock().await;
                         let conversation = conv_map
                             .get_mut(&chat_id)
@@ -272,7 +292,7 @@ struct TokenCounter {
 impl TokenCounter {
     fn new(model_name: &str) -> Self {
         let bpe = get_bpe_from_model(model_name)
-            .or_else(|_| o200k_base())
+            .or_else(|_| cl100k_base())
             .expect("failed to load tokenizer vocabulary")
             .into();
         Self { bpe }
@@ -280,5 +300,33 @@ impl TokenCounter {
 
     fn count_text(&self, text: &str) -> usize {
         self.bpe.encode_with_special_tokens(text).len()
+    }
+}
+
+struct TypingIndicator {
+    handle: JoinHandle<()>,
+}
+
+impl TypingIndicator {
+    fn new(bot: Bot, chat_id: ChatId) -> Self {
+        let handle = tokio::spawn(async move {
+            loop {
+                if bot
+                    .send_chat_action(chat_id, ChatAction::Typing)
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+                sleep(Duration::from_secs(4)).await;
+            }
+        });
+        Self { handle }
+    }
+}
+
+impl Drop for TypingIndicator {
+    fn drop(&mut self) {
+        self.handle.abort();
     }
 }
