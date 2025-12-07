@@ -8,6 +8,7 @@ use openai_api::send_with_web_search;
 use std::{collections::HashMap, sync::Arc};
 use teloxide::{
     prelude::*,
+    types::ParseMode,
     types::{ChatId, Message, ReactionType},
 };
 use tokio::sync::Mutex;
@@ -87,7 +88,9 @@ async fn main() -> Result<(), DynError> {
 
                 match llm_result {
                     Ok(answer) => {
-                        bot.send_message(chat_id, answer.clone()).await?;
+                        bot.send_message(chat_id, answer.clone())
+                            .parse_mode(ParseMode::MarkdownV2)
+                            .await?;
                         let mut conv_map = conversations.lock().await;
                         let conversation = conv_map
                             .get_mut(&chat_id)
