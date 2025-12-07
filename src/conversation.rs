@@ -1,7 +1,5 @@
-use std::{collections::VecDeque, sync::Arc};
-
-use genai::chat::{ChatMessage, ChatRequest};
 use log::warn;
+use std::{collections::VecDeque, sync::Arc};
 use tiktoken_rs::{CoreBPE, get_bpe_from_model, o200k_base};
 
 #[derive(Default)]
@@ -15,7 +13,7 @@ impl Conversation {
     pub fn record_user_message(&mut self, tokenizer: &TokenCounter, user_text: String) -> u64 {
         let turn_id = self.next_turn_id;
         self.next_turn_id += 1;
-        let user = TokenizedMessage::new_user(user_text, tokenizer);
+        let user = TokenizedMessage::new(user_text, tokenizer);
         self.prompt_tokens += user.tokens;
         self.turns.push_back(ChatTurn {
             id: turn_id,
@@ -32,7 +30,7 @@ impl Conversation {
         answer: String,
     ) {
         if let Some(turn) = self.turns.iter_mut().find(|turn| turn.id == turn_id) {
-            let assistant = TokenizedMessage::new_assistant(answer, tokenizer);
+            let assistant = TokenizedMessage::new(answer, tokenizer);
             self.prompt_tokens += assistant.tokens;
             turn.assistant = Some(assistant);
         }
@@ -52,21 +50,21 @@ impl Conversation {
         self.turns.is_empty()
     }
 
-    pub fn build_chat_request(&self, system_prompt: Option<&str>) -> ChatRequest {
-        let mut messages = Vec::with_capacity(self.turns.len() * 2 + 1);
+    pub fn messages(&self) -> Vec<HistoryMessage> {
+        let mut history = Vec::with_capacity(self.turns.len() * 2);
         for turn in &self.turns {
-            messages.push(turn.user.message.clone());
+            history.push(HistoryMessage::new(
+                MessageRole::User,
+                turn.user.text.clone(),
+            ));
             if let Some(assistant) = &turn.assistant {
-                messages.push(assistant.message.clone());
+                history.push(HistoryMessage::new(
+                    MessageRole::Assistant,
+                    assistant.text.clone(),
+                ));
             }
         }
-
-        let chat_req = ChatRequest::new(messages);
-        if let Some(prompt) = system_prompt {
-            chat_req.with_system(prompt.to_owned())
-        } else {
-            chat_req
-        }
+        history
     }
 
     pub fn prompt_token_count(&self) -> usize {
@@ -95,6 +93,23 @@ impl Conversation {
     }
 }
 
+pub struct HistoryMessage {
+    pub role: MessageRole,
+    pub text: String,
+}
+
+impl HistoryMessage {
+    fn new(role: MessageRole, text: String) -> Self {
+        Self { role, text }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum MessageRole {
+    User,
+    Assistant,
+}
+
 struct ChatTurn {
     id: u64,
     user: TokenizedMessage,
@@ -114,25 +129,14 @@ impl ChatTurn {
 
 #[derive(Clone)]
 struct TokenizedMessage {
-    message: ChatMessage,
+    text: String,
     tokens: usize,
 }
 
 impl TokenizedMessage {
-    fn new_user(text: String, tokenizer: &TokenCounter) -> Self {
+    fn new(text: String, tokenizer: &TokenCounter) -> Self {
         let tokens = tokenizer.count_text(&text);
-        Self {
-            message: ChatMessage::user(text),
-            tokens,
-        }
-    }
-
-    fn new_assistant(text: String, tokenizer: &TokenCounter) -> Self {
-        let tokens = tokenizer.count_text(&text);
-        Self {
-            message: ChatMessage::assistant(text),
-            tokens,
-        }
+        Self { text, tokens }
     }
 }
 
