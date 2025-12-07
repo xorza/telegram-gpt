@@ -133,20 +133,16 @@ async fn send_to_llm(
     model: &str,
     chat_request: ChatRequest,
 ) -> Result<String, DynError> {
-    let search_tool = Tool::new("web_search").with_config(json!({
-        "user_location": {
-            "type": "approximate",
-            "country": "US"
-        }
-    }));
-
-    let chat_request = chat_request.with_tools(vec![search_tool]);
+    let search_tool = Tool::new("web_search");
+    let chat_request = chat_request.append_tool(search_tool);
     let chat_res = client.exec_chat(model, chat_request, None).await?;
 
     let answer = chat_res
-        .first_text()
+        .texts()
+        .into_iter()
         .map(|text| text.trim().to_string())
         .filter(|text| !text.is_empty())
+        .reduce(|acc, text| format!("{acc}\n{text}"))
         .unwrap_or_else(|| "The language model returned an empty response.".to_string());
 
     Ok(answer)
