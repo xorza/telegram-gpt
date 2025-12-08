@@ -1,4 +1,4 @@
-use crate::conversation::{Conversation, Message, MessageRole, TokenCounter};
+use crate::conversation::{ChatTurn, Conversation, Message, MessageRole, TokenCounter};
 use anyhow::Result;
 use rusqlite::{Connection, Error as SqliteError};
 use teloxide::types::ChatId;
@@ -115,7 +115,6 @@ pub fn load_conversation(chat_id: ChatId, conn: &Connection) -> anyhow::Result<C
     };
 
     let mut conv = Conversation {
-        next_turn_id: 0,
         chat_id: chat_id.0 as u64,
         turns: Default::default(),
         prompt_tokens: 0,
@@ -136,22 +135,20 @@ pub fn load_conversation(chat_id: ChatId, conn: &Connection) -> anyhow::Result<C
             ))
         })?;
 
-        let mut last_user_turn: Option<u64> = None;
+        let mut user_message: Option<Message> = None;
         for row in rows {
             if let Ok((role, message)) = row {
                 conv.prompt_tokens += message.tokens;
 
                 match role {
                     MessageRole::User => {
-                        let turn_id = conv.record_user_message(message);
-                        last_user_turn = Some(turn_id);
+                        user_message = Some(message);
                     }
                     MessageRole::Assistant => {
-                        conv.record_assistant_response(
-                            last_user_turn.expect("No user message found"),
-                            message,
-                        );
-                        last_user_turn = None;
+                        conv.add_turn(ChatTurn {
+                            user: user_message.take().expect("No user message found"),
+                            assistant: message,
+                        });
                     }
                     _ => {
                         let error = "Invalid message role";
@@ -162,7 +159,7 @@ pub fn load_conversation(chat_id: ChatId, conn: &Connection) -> anyhow::Result<C
             }
         }
 
-        if last_user_turn.is_some() {
+        if user_message.is_some() {
             let error = "Last user message not followed by assistant response";
             log::error!("{}", error);
             panic!("{}", error);

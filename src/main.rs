@@ -6,7 +6,7 @@ mod openai_api;
 mod typing;
 
 use anyhow::{Context, anyhow};
-use conversation::{Conversation, MessageRole, TokenCounter};
+use conversation::{ChatTurn, Conversation, MessageRole, TokenCounter};
 use db::init_db;
 use db::load_conversation;
 use flexi_logger::{Cleanup, Criterion, Duplicate, FileSpec, Logger, Naming};
@@ -79,7 +79,7 @@ async fn process_message(app: App, bot: Bot, msg: Message) -> anyhow::Result<()>
 
     log::info!("received message {message_id} from chat {chat_id}");
 
-    let (turn_id, llm_result) = {
+    let (user_message, llm_result) = {
         let _typing_indicator = TypingIndicator::new(bot.clone(), chat_id);
 
         let mut conversation = app.get_conversation(chat_id).await?;
@@ -89,17 +89,11 @@ async fn process_message(app: App, bot: Bot, msg: Message) -> anyhow::Result<()>
             return Err(anyhow::anyhow!(error));
         }
 
-        let message = conversation::Message::with_text(user_text, &app.tokenizer);
-
-        let turn_id = conversation.record_user_message(message);
+        let user_message = conversation::Message::with_text(user_text, &app.tokenizer);
 
         let system_prompt_tokens = app.system_prompt.as_ref().map_or(0, |p| p.tokens);
-        conversation.prune_to_token_budget(app.max_prompt_tokens - system_prompt_tokens);
-
-        log::debug!(
-            "chat {chat_id} prompt tokens: {prompt_tokens}/{max_prompt_tokens}",
-            prompt_tokens = conversation.prompt_token_count() + system_prompt_tokens,
-            max_prompt_tokens = app.max_prompt_tokens
+        conversation.prune_to_token_budget(
+            app.max_prompt_tokens - system_prompt_tokens - user_message.tokens,
         );
 
         let llm_result = send_with_web_search(
@@ -107,10 +101,11 @@ async fn process_message(app: App, bot: Bot, msg: Message) -> anyhow::Result<()>
             &app.model,
             app.system_prompt.as_ref(),
             &conversation,
+            &user_message,
         )
         .await;
 
-        (turn_id, llm_result)
+        (user_message, llm_result)
     };
 
     {
@@ -118,14 +113,18 @@ async fn process_message(app: App, bot: Bot, msg: Message) -> anyhow::Result<()>
 
         match llm_result {
             Ok(answer) => {
-                let message = conversation::Message::with_text(answer.clone(), &app.tokenizer);
-                conversation.record_assistant_response(turn_id, message);
+                let assistant_message =
+                    conversation::Message::with_text(answer.clone(), &app.tokenizer);
+                let turn = ChatTurn {
+                    user: user_message,
+                    assistant: assistant_message,
+                };
+                conversation.add_turn(turn);
+
                 bot.send_message(chat_id, answer).await?;
             }
             Err(err) => {
                 log::error!("failed to get llm response: {err}");
-
-                conversation.discard_turn(turn_id);
 
                 bot.set_message_reaction(chat_id, message_id)
                     .reaction(vec![ReactionType::Emoji {

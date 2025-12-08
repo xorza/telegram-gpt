@@ -1,7 +1,7 @@
 use std::panic::AssertUnwindSafe;
 
 use crate::DynError;
-use crate::conversation::{Conversation, MessageRole, Message};
+use crate::conversation::{Conversation, Message, MessageRole};
 use anyhow::{Context, anyhow};
 use reqwest::Client;
 use serde_json::{Value, json};
@@ -17,6 +17,7 @@ pub async fn send_with_web_search(
     model: &str,
     system_prompt: Option<&Message>,
     conversation: &Conversation,
+    user_message: &Message,
 ) -> anyhow::Result<String, DynError> {
     let mut input_items = Vec::new();
 
@@ -34,14 +35,17 @@ pub async fn send_with_web_search(
             &turn.user.text,
             ContentType::Input,
         ));
-        if let Some(assistant) = &turn.assistant {
-            input_items.push(text_content(
-                MessageRole::Assistant,
-                &assistant.text,
-                ContentType::Output,
-            ));
-        }
+        input_items.push(text_content(
+            MessageRole::Assistant,
+            &turn.assistant.text,
+            ContentType::Output,
+        ));
     }
+    input_items.push(text_content(
+        MessageRole::User,
+        &user_message.text,
+        ContentType::Input,
+    ));
 
     if input_items.is_empty() {
         return Err("no content available for OpenAI call".into());

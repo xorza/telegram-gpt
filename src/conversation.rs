@@ -4,7 +4,6 @@ use tiktoken_rs::{CoreBPE, get_bpe_from_model, o200k_base};
 
 #[derive(Debug)]
 pub struct Conversation {
-    pub next_turn_id: u64,
     pub chat_id: u64,
     pub turns: VecDeque<ChatTurn>,
     pub prompt_tokens: usize,
@@ -13,9 +12,8 @@ pub struct Conversation {
 
 #[derive(Debug)]
 pub struct ChatTurn {
-    pub id: u64,
     pub user: Message,
-    pub assistant: Option<Message>,
+    pub assistant: Message,
 }
 
 #[derive(Debug, Clone)]
@@ -38,56 +36,15 @@ pub struct TokenCounter {
 }
 
 impl Conversation {
-    pub fn record_user_message(&mut self, message: Message) -> u64 {
-        let turn_id = self.next_turn_id;
-        self.next_turn_id += 1;
-        self.prompt_tokens += message.tokens;
-        self.turns.push_back(ChatTurn {
-            id: turn_id,
-            user: message,
-            assistant: None,
-        });
-        turn_id
-    }
-
-    pub fn record_assistant_response(&mut self, turn_id: u64, message: Message) {
-        if let Some(turn) = self.turns.iter_mut().find(|turn| turn.id == turn_id) {
-            self.prompt_tokens += message.tokens;
-            turn.assistant = Some(message);
-        }
-    }
-
-    pub fn discard_turn(&mut self, turn_id: u64) {
-        if let Some(index) = self.turns.iter().position(|turn| turn.id == turn_id) {
-            if let Some(removed_turn) = self.turns.remove(index) {
-                self.prompt_tokens = self
-                    .prompt_tokens
-                    .saturating_sub(removed_turn.total_tokens());
-            }
-        }
-    }
-
-    pub fn prompt_token_count(&self) -> usize {
-        self.prompt_tokens
+    pub fn add_turn(&mut self, turn: ChatTurn) {
+        self.prompt_tokens += turn.total_tokens();
+        self.turns.push_back(turn);
     }
 
     pub fn prune_to_token_budget(&mut self, max_prompt_tokens: usize) {
         while self.prompt_tokens > max_prompt_tokens {
-            if self
-                .turns
-                .front()
-                .map(|turn| turn.is_complete())
-                .unwrap_or(false)
-            {
-                if let Some(removed) = self.turns.pop_front() {
-                    self.prompt_tokens = self.prompt_tokens.saturating_sub(removed.total_tokens());
-                }
-            } else {
-                warn!(
-                    "token budget exceeded but no complete turns left to drop (need <= {max_prompt_tokens}, have {})",
-                    self.prompt_tokens
-                );
-                break;
+            if let Some(removed) = self.turns.pop_front() {
+                self.prompt_tokens = self.prompt_tokens.saturating_sub(removed.total_tokens());
             }
         }
     }
@@ -95,12 +52,7 @@ impl Conversation {
 
 impl ChatTurn {
     fn total_tokens(&self) -> usize {
-        let assistant_tokens = self.assistant.as_ref().map(|msg| msg.tokens).unwrap_or(0);
-        self.user.tokens + assistant_tokens
-    }
-
-    fn is_complete(&self) -> bool {
-        self.assistant.is_some()
+        self.user.tokens + self.assistant.tokens
     }
 }
 
