@@ -197,7 +197,9 @@ impl App {
         let mut conv_map = self.conversations.lock().await;
 
         if !conv_map.contains_key(&chat_id) {
-            let conv = db::load_conversation(&self.db, chat_id, &self.tokenizer).await?;
+            let conv =
+                db::load_conversation(&self.db, chat_id, &self.tokenizer, self.max_prompt_tokens)
+                    .await?;
             conv_map.insert(chat_id, conv);
         }
 

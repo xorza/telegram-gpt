@@ -82,6 +82,7 @@ pub async fn load_conversation(
     db: &Arc<Mutex<Connection>>,
     chat_id: ChatId,
     tokenizer: &TokenCounter,
+    max_tokens: usize,
 ) -> anyhow::Result<Conversation> {
     let conn = db.lock().await;
 
