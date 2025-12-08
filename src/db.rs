@@ -3,8 +3,10 @@ use anyhow::Result;
 use rusqlite::{Connection, Error as SqliteError};
 use teloxide::types::ChatId;
 
+const SCHEMA_VERSION: i32 = 1;
+
 pub fn init_db() -> Result<Connection> {
-    let db_path = std::env::var("SQLITE_PATH").unwrap_or_else(|_| "data/bot.db".to_string());
+    let db_path = std::env::var("SQLITE_PATH").unwrap_or_else(|_| "data/db.sqlite".to_string());
 
     // Ensure parent directory exists
     if let Some(parent) = std::path::Path::new(&db_path).parent() {
@@ -23,8 +25,20 @@ pub fn init_db() -> Result<Connection> {
         _ => log::warn!("DB_ENCRYPTION_KEY not set; database will be unencrypted"),
     }
 
-    // Initialize database schema
-    init_schema(&conn)?;
+    // Initialize database schema if needed and validate version.
+    let version = get_schema_version(&conn)?;
+    if version == 0 {
+        init_schema(&conn)?;
+        set_schema_version(&conn, SCHEMA_VERSION)?;
+        log::info!("Initialized database schema version {}", SCHEMA_VERSION);
+    } else if version != SCHEMA_VERSION {
+        panic!(
+            "Unsupported database schema version {} (expected {})",
+            version, SCHEMA_VERSION
+        );
+    } else {
+        log::info!("Database schema version {} detected", version);
+    }
 
     Ok(conn)
 }
@@ -52,6 +66,14 @@ fn init_schema(conn: &Connection) -> Result<(), SqliteError> {
     )?;
 
     Ok(())
+}
+
+fn get_schema_version(conn: &Connection) -> Result<i32, SqliteError> {
+    conn.query_row("PRAGMA user_version", [], |row| row.get(0))
+}
+
+fn set_schema_version(conn: &Connection, version: i32) -> Result<(), SqliteError> {
+    conn.pragma_update(None, "user_version", version)
 }
 
 pub fn load_conversation(chat_id: ChatId, conn: &Connection) -> anyhow::Result<Conversation> {
