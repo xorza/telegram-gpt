@@ -2,11 +2,39 @@ use log::warn;
 use std::{collections::VecDeque, sync::Arc};
 use tiktoken_rs::{CoreBPE, get_bpe_from_model, o200k_base};
 
-#[derive(Default)]
+pub struct HistoryMessage {
+    pub role: MessageRole,
+    pub text: String,
+}
+
+#[derive(Debug, Default)]
 pub struct Conversation {
     next_turn_id: u64,
     turns: VecDeque<ChatTurn>,
     prompt_tokens: usize,
+}
+
+#[derive(Debug)]
+pub enum MessageRole {
+    User,
+    Assistant,
+}
+#[derive(Debug)]
+struct ChatTurn {
+    id: u64,
+    user: TokenizedMessage,
+    assistant: Option<TokenizedMessage>,
+}
+
+#[derive(Debug)]
+struct TokenizedMessage {
+    text: String,
+    tokens: usize,
+}
+
+#[derive(Clone)]
+pub struct TokenCounter {
+    bpe: Arc<CoreBPE>,
 }
 
 impl Conversation {
@@ -93,27 +121,10 @@ impl Conversation {
     }
 }
 
-pub struct HistoryMessage {
-    pub role: MessageRole,
-    pub text: String,
-}
-
 impl HistoryMessage {
     fn new(role: MessageRole, text: String) -> Self {
         Self { role, text }
     }
-}
-
-#[derive(Clone, Copy)]
-pub enum MessageRole {
-    User,
-    Assistant,
-}
-
-struct ChatTurn {
-    id: u64,
-    user: TokenizedMessage,
-    assistant: Option<TokenizedMessage>,
 }
 
 impl ChatTurn {
@@ -127,22 +138,11 @@ impl ChatTurn {
     }
 }
 
-#[derive(Clone)]
-struct TokenizedMessage {
-    text: String,
-    tokens: usize,
-}
-
 impl TokenizedMessage {
     fn new(text: String, tokenizer: &TokenCounter) -> Self {
         let tokens = tokenizer.count_text(&text);
         Self { text, tokens }
     }
-}
-
-#[derive(Clone)]
-pub struct TokenCounter {
-    bpe: Arc<CoreBPE>,
 }
 
 impl TokenCounter {

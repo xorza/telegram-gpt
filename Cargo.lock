@@ -1833,6 +1833,7 @@ dependencies = [
 name = "tggpt"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "dotenv",
  "flexi_logger",
  "log",

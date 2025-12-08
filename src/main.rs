@@ -18,38 +18,22 @@ type DynError = Box<dyn std::error::Error + Send + Sync>;
 const DEFAULT_MODEL: &str = "gpt-4.1";
 const DEFAULT_MAX_PROMPT_TOKENS: usize = 120_000;
 
+struct App {
+    bot: Bot,
+    http_client: Arc<reqwest::Client>,
+    model: String,
+    tokenizer: Arc<TokenCounter>,
+    system_prompt: Option<String>,
+    system_prompt_tokens: usize,
+    max_prompt_tokens: usize,
+    conversations: Arc<Mutex<HashMap<ChatId, Conversation>>>,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), DynError> {
-    dotenv::dotenv().ok();
-    // Log to rotating files capped at 10MB each, keeping the 3 newest, while also duplicating info logs to stdout.
-    Logger::try_with_env_or_str("info")?
-        .log_to_file(FileSpec::default().directory("logs"))
-        .rotate(
-            Criterion::Size(10 * 1024 * 1024),
-            Naming::Numbers,
-            Cleanup::KeepLogFiles(3),
-        )
-        .duplicate_to_stdout(Duplicate::Warn)
-        .start()?;
-    log::info!("starting tggpt bot");
+    let app = init()?;
 
-    let bot = Bot::from_env();
-    let http_client = Arc::new(reqwest::Client::new());
-    let model = std::env::var("GENAI_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
-    let tokenizer = Arc::new(TokenCounter::new(&model));
-    let system_prompt = std::env::var("GENAI_SYSTEM_PROMPT").ok();
-    let system_prompt_tokens = system_prompt
-        .as_deref()
-        .map(|prompt| tokenizer.count_text(prompt))
-        .unwrap_or(0);
-    let max_prompt_tokens = std::env::var("GENAI_MAX_PROMPT_TOKENS")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(DEFAULT_MAX_PROMPT_TOKENS);
-    let conversations: Arc<Mutex<HashMap<ChatId, Conversation>>> =
-        Arc::new(Mutex::new(HashMap::new()));
-
-    teloxide::repl(bot, move |bot: Bot, msg: Message| {
+    teloxide::repl(app.bot.clone(), move |bot: Bot, msg: Message| {
         let model = model.clone();
         let system_prompt = system_prompt.clone();
         let tokenizer = tokenizer.clone();
@@ -132,4 +116,48 @@ async fn main() -> Result<(), DynError> {
     .await;
 
     Ok(())
+}
+
+fn init() -> anyhow::Result<App, anyhow::Error> {
+    dotenv::dotenv().ok();
+
+    // Log to rotating files capped at 10MB each, keeping the 3 newest, while also duplicating info logs to stdout.
+    Logger::try_with_env_or_str("info")?
+        .log_to_file(FileSpec::default().directory("logs"))
+        .rotate(
+            Criterion::Size(10 * 1024 * 1024),
+            Naming::Numbers,
+            Cleanup::KeepLogFiles(3),
+        )
+        .duplicate_to_stdout(Duplicate::Warn)
+        .start()?;
+
+    log::info!("starting tggpt bot");
+
+    let bot = Bot::from_env();
+    let http_client = Arc::new(reqwest::Client::new());
+    let model = std::env::var("GENAI_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
+    let tokenizer = Arc::new(TokenCounter::new(&model));
+    let system_prompt = std::env::var("GENAI_SYSTEM_PROMPT").ok();
+    let system_prompt_tokens = system_prompt
+        .as_deref()
+        .map(|prompt| tokenizer.count_text(prompt))
+        .unwrap_or(0);
+    let max_prompt_tokens = std::env::var("GENAI_MAX_PROMPT_TOKENS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(DEFAULT_MAX_PROMPT_TOKENS);
+    let conversations: Arc<Mutex<HashMap<ChatId, Conversation>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+
+    Ok(App {
+        bot,
+        http_client,
+        model,
+        tokenizer,
+        system_prompt,
+        system_prompt_tokens,
+        max_prompt_tokens,
+        conversations,
+    })
 }
