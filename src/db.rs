@@ -133,8 +133,11 @@ pub async fn load_conversation(
     };
 
     {
-        let mut stmt = conn
-            .prepare("SELECT tokens, role, text FROM history WHERE chat_id = ?1 ORDER BY id ASC")?;
+        // Fetch latest messages first so we can stop once the token budget is exceeded,
+        // then restore chronological order for conversation reconstruction.
+        let mut stmt = conn.prepare(
+            "SELECT tokens, role, text FROM history WHERE chat_id = ?1 ORDER BY id DESC",
+        )?;
 
         let rows = stmt.query_map([chat_id.0], |row| {
             let tokens: usize = row.get(0)?;
@@ -146,34 +149,49 @@ pub async fn load_conversation(
             ))
         })?;
 
-        let mut user_message: Option<conversation::Message> = None;
+        let mut collected: Vec<(MessageRole, conversation::Message)> = Vec::new();
+        let mut total_tokens: usize = 0;
+
         for row in rows {
             if let Ok((role, message)) = row {
-                conv.prompt_tokens += message.tokens;
-
-                match role {
-                    MessageRole::User => {
-                        user_message = Some(message);
-                    }
-                    MessageRole::Assistant => {
-                        conv.add_turn(ChatTurn {
-                            user: user_message.take().expect("No user message found"),
-                            assistant: message,
-                        });
-                    }
-                    _ => {
-                        let error = "Invalid message role";
-                        log::error!("{}", error);
-                        panic!("{}", error)
-                    }
+                total_tokens += message.tokens;
+                collected.push((role, message));
+                if total_tokens > max_tokens {
+                    break;
                 }
             }
         }
 
-        if user_message.is_some() {
-            let error = "Last user message not followed by assistant response";
-            log::error!("{}", error);
-            panic!("{}", error);
+        let mut user_message: Option<conversation::Message> = None;
+
+        // We iterated newest-to-oldest; restore to oldest-first.
+        for (role, message) in collected.into_iter().rev() {
+            conv.prompt_tokens += message.tokens;
+
+            match role {
+                MessageRole::User => {
+                    user_message = Some(message);
+                }
+                MessageRole::Assistant => {
+                    conv.add_turn(ChatTurn {
+                        user: user_message.take().expect("Missing user message"),
+                        assistant: message,
+                    });
+                }
+                _ => {
+                    log::error!("Invalid message role in DB for chat {}", chat_id);
+                    panic!("Invalid message role");
+                }
+            }
+        }
+
+        // Drop a trailing user message without assistant to avoid panic on malformed history.
+        if let Some(unpaired) = user_message.take() {
+            log::warn!(
+                "Dropping trailing user message without assistant response for chat {}",
+                chat_id
+            );
+            conv.prompt_tokens = conv.prompt_tokens.saturating_sub(unpaired.tokens);
         }
     }
 
