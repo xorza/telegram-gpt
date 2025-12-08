@@ -23,7 +23,7 @@ use typing::TypingIndicator;
 
 type DynError = Box<dyn std::error::Error + Send + Sync>;
 
-const DEFAULT_MODEL: &str = "gpt-4.1";
+const DEFAULT_OPEN_AI_MODEL: &str = "gpt-4.1";
 const DEFAULT_MAX_PROMPT_TOKENS: usize = 120_000;
 
 #[derive(Clone)]
@@ -129,9 +129,10 @@ async fn init() -> anyhow::Result<App, anyhow::Error> {
 
     let bot = Bot::from_env();
     let http_client = Arc::new(reqwest::Client::new());
-    let model = std::env::var("GENAI_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
+    let model =
+        std::env::var("OPEN_AI_MODEL").unwrap_or_else(|_| DEFAULT_OPEN_AI_MODEL.to_string());
     let tokenizer = Arc::new(TokenCounter::new(&model));
-    let system_prompt = std::env::var("GENAI_SYSTEM_PROMPT")
+    let system_prompt = std::env::var("OPEN_AI_SYSTEM_PROMPT")
         .ok()
         .filter(|s| !s.is_empty())
         .and_then(|s| Some(TokenizedMessage::new(s, &tokenizer)));
