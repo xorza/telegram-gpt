@@ -7,7 +7,7 @@ mod typing;
 use anyhow::{Context, anyhow};
 use conversation::{Conversation, MessageRole, TokenCounter, TokenizedMessage};
 use flexi_logger::{Cleanup, Criterion, Duplicate, FileSpec, Logger, Naming};
-use openai_api::{fetch_context_length, send_with_web_search};
+use openai_api::{context_length, send_with_web_search};
 use reqwest::header::PROXY_AUTHENTICATE;
 use serde_json::Value;
 use std::clone;
@@ -137,18 +137,12 @@ async fn init() -> anyhow::Result<App, anyhow::Error> {
         .filter(|s| !s.is_empty())
         .and_then(|s| Some(TokenizedMessage::new(s, &tokenizer)));
 
-    // Prefer model's advertised context window, fall back to env override or default.
-    let api_context = fetch_context_length(&http_client, &model).await;
-    if let Err(err) = &api_context {
-        log::warn!(
-            "using default prompt token budget {DEFAULT_MAX_PROMPT_TOKENS} (couldn't fetch model context: {err})"
-        );
-    }
-    let api_context = api_context.unwrap_or(DEFAULT_MAX_PROMPT_TOKENS);
+    // Prefer model's advertised context window, fall back to default.
+    let model_max_tokens = context_length(&model).unwrap_or(DEFAULT_MAX_PROMPT_TOKENS);
     let max_prompt_tokens = std::env::var("OPEN_AI_MAX_PROMPT_TOKENS")
         .ok()
         .and_then(|value| value.parse().ok())
-        .unwrap_or(api_context);
+        .unwrap_or(model_max_tokens);
 
     let conversations: Arc<Mutex<HashMap<ChatId, Conversation>>> =
         Arc::new(Mutex::new(HashMap::new()));

@@ -144,65 +144,13 @@ fn extract_output_text(value: &Value) -> Option<String> {
     None
 }
 
-fn infer_context_length_from_name(model: &str) -> Option<usize> {
-    // Based on OpenAI documentation (Dec 8, 2025)
-    // GPT-4.1 variants: ~1M context tokens.
-    if model.starts_with("gpt-4.1") {
-        return Some(1_000_000);
+pub fn context_length(model: &str) -> Option<usize> {
+    // Based on OpenAI documentation as of Dec 8, 2025.
+    if model.starts_with("gpt-4.1") || model.starts_with("gpt-5.1") {
+        return Some(1_000_000); // 1M-token context window
     }
-    // GPT-4o long context: 128k.
     if model.starts_with("gpt-4o") {
-        return Some(128_000);
+        return Some(128_000); // long-context GPT-4o
     }
     None
-}
-
-fn extract_context_length(value: &Value) -> Option<usize> {
-    [
-        "context_length",
-        "context_window",
-        "max_context_length",
-        "input_token_limit",
-        "max_input_tokens",
-    ]
-    .iter()
-    .find_map(|key| value.get(*key).and_then(|v| v.as_u64()))
-    .map(|v| v as usize)
-}
-
-pub async fn fetch_context_length(http: &reqwest::Client, model: &str) -> anyhow::Result<usize> {
-    let api_key = std::env::var("OPENAI_API_KEY").context("OPENAI_API_KEY is required")?;
-
-    let url = format!("https://api.openai.com/v1/models/{model}");
-    let resp = http
-        .get(&url)
-        .bearer_auth(api_key)
-        .send()
-        .await
-        .context("failed to call OpenAI models endpoint")?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(anyhow!("model metadata request failed {status}: {body}"));
-    }
-
-    let value: Value = resp
-        .json()
-        .await
-        .context("invalid JSON in model metadata response")?;
-
-    if let Some(context_len) = extract_context_length(&value) {
-        log::info!("fetched context length for model {model}: {context_len}");
-        return Ok(context_len);
-    }
-
-    // if let Some(context_len) = infer_context_length_from_name(model) {
-    //     log::info!(
-    //         "using inferred context length for model {model}: {context_len} (metadata missing)"
-    //     );
-    //     return Ok(context_len);
-    // }
-
-    Err(anyhow!("no context length field in model metadata"))
 }
