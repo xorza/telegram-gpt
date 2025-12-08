@@ -15,7 +15,7 @@ use teloxide::{
     prelude::*,
     types::{ChatId, Message, ReactionType},
 };
-use tokio::sync::Mutex;
+use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard};
 use typing::TypingIndicator;
 
 type DynError = Box<dyn std::error::Error + Send + Sync>;
@@ -59,16 +59,9 @@ async fn main() -> Result<(), DynError> {
             let typing_guard = TypingIndicator::new(bot.clone(), chat_id);
 
             let (turn_id, prompt_tokens, history_messages) = {
-                let mut conv_map = app.conversations.lock().await;
-                let conversation = conv_map
-                    .entry(chat_id)
-                    .or_insert_with(Conversation::default);
+                let mut conversation = app.get_conversation(chat_id).await;
                 let turn_id = conversation.record_user_message(&app.tokenizer, user_text.clone());
-                let system_prompt_tokens = app
-                    .system_prompt
-                    .as_ref()
-                    .and_then(|p| Some(p.tokens))
-                    .unwrap_or_default();
+                let system_prompt_tokens = app.system_prompt.as_ref().map_or(0, |p| p.tokens);
                 conversation.prune_to_token_budget(app.max_prompt_tokens, system_prompt_tokens);
                 let history = conversation.messages();
                 let prompt_tokens = conversation.prompt_token_count() + system_prompt_tokens;
@@ -90,24 +83,17 @@ async fn main() -> Result<(), DynError> {
 
             drop(typing_guard);
 
-            let mut conv_map = app.conversations.lock().await;
-            let conversation = conv_map
-                .get_mut(&chat_id)
-                .expect("conversation should exist");
+            let mut conversation = app.get_conversation(chat_id).await;
 
             match llm_result {
                 Ok(answer) => {
-                    bot.send_message(chat_id, answer.clone()).await?;
-
-                    conversation.record_assistant_response(&app.tokenizer, turn_id, answer);
+                    conversation.record_assistant_response(&app.tokenizer, turn_id, answer.clone());
+                    bot.send_message(chat_id, answer).await?;
                 }
                 Err(err) => {
                     log::error!("failed to get llm response: {err}");
 
                     conversation.discard_turn(turn_id);
-                    if conversation.is_empty() {
-                        conv_map.remove(&chat_id);
-                    }
 
                     bot.set_message_reaction(chat_id, message_id)
                         .reaction(vec![ReactionType::Emoji {
@@ -175,5 +161,16 @@ impl Debug for App {
             .field("max_prompt_tokens", &self.max_prompt_tokens)
             .field("conversations", &self.conversations)
             .finish()
+    }
+}
+
+impl App {
+    async fn get_conversation(&self, chat_id: ChatId) -> MappedMutexGuard<'_, Conversation> {
+        // Lock the shared map then map the guard to just the Conversation for this chat_id
+        let conv_map = self.conversations.lock().await;
+
+        MutexGuard::map(conv_map, |map| {
+            map.entry(chat_id).or_insert_with(Conversation::default)
+        })
     }
 }

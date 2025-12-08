@@ -76,10 +76,6 @@ impl Conversation {
         }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.turns.is_empty()
-    }
-
     pub fn messages(&self) -> Vec<HistoryMessage> {
         let mut history = Vec::with_capacity(self.turns.len() * 2);
         for turn in &self.turns {
