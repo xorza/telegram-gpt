@@ -84,131 +84,138 @@ pub async fn load_conversation(
     tokenizer: &TokenCounter,
     max_tokens: usize,
 ) -> anyhow::Result<Conversation> {
-    let conn = db.lock().await;
+    let (mut conversation, history) = {
+        let conn = db.lock().await;
 
-    let (is_authorized, open_ai_api_key, system_prompt) = {
-        // Fetch exactly one chat row; panic if multiple rows are found.
-        let mut stmt = conn.prepare(
-            "SELECT is_authorized, open_ai_api_key, system_prompt \
+        let (is_authorized, open_ai_api_key, system_prompt) = {
+            // Fetch exactly one chat row; panic if multiple rows are found.
+            let mut stmt = conn.prepare(
+                "SELECT is_authorized, open_ai_api_key, system_prompt \
             FROM chats WHERE chat_id = ?1 LIMIT 2",
-        )?;
-        let mut rows = stmt.query([chat_id.0])?;
+            )?;
+            let mut rows = stmt.query([chat_id.0])?;
 
-        let (is_authorized, open_ai_api_key, system_prompt) = match rows.next()? {
-            Some(row) => {
-                let is_authorized: bool = row.get(0)?;
-                let open_ai_api_key: String = row.get(1)?;
-                let system_prompt: String = row.get(2)?;
-                (is_authorized, open_ai_api_key, system_prompt)
-            }
-            None => {
-                let r = conn.execute(
+            let (is_authorized, open_ai_api_key, system_prompt) = match rows.next()? {
+                Some(row) => {
+                    let is_authorized: bool = row.get(0)?;
+                    let open_ai_api_key: String = row.get(1)?;
+                    let system_prompt: String = row.get(2)?;
+                    (is_authorized, open_ai_api_key, system_prompt)
+                }
+                None => {
+                    let r = conn.execute(
                     "INSERT INTO chats (chat_id, is_authorized, open_ai_api_key, system_prompt) \
                      VALUES (?1, ?2, ?3, ?4)",
                     rusqlite::params![chat_id.0, false, "", ""],
                 )?;
-                if r != 1 {
-                    let error = format!("failed to insert chat row for chat_id {}", chat_id.0);
-                    log::error!("{}", error);
-                    panic!("{}", error);
-                }
+                    if r != 1 {
+                        let error = format!("failed to insert chat row for chat_id {}", chat_id.0);
+                        log::error!("{}", error);
+                        panic!("{}", error);
+                    }
 
-                (false, String::new(), String::new())
+                    (false, String::new(), String::new())
+                }
+            };
+
+            if rows.next()?.is_some() {
+                panic!("multiple chat rows found for chat_id {}", chat_id.0);
             }
+            (is_authorized, open_ai_api_key, system_prompt)
         };
 
-        if rows.next()?.is_some() {
-            panic!("multiple chat rows found for chat_id {}", chat_id.0);
-        }
-        (is_authorized, open_ai_api_key, system_prompt)
-    };
+        let system_prompt = if !system_prompt.is_empty() {
+            Some(conversation::Message::with_text(system_prompt, tokenizer))
+        } else {
+            None
+        };
 
-    let system_prompt = if !system_prompt.is_empty() {
-        Some(conversation::Message::with_text(system_prompt, tokenizer))
-    } else {
-        None
-    };
+        let conversation = Conversation {
+            chat_id: chat_id.0 as u64,
+            turns: Default::default(),
+            prompt_tokens: 0,
+            is_authorized,
+            openai_api_key: open_ai_api_key,
+            system_prompt,
+        };
 
-    let mut conv = Conversation {
-        chat_id: chat_id.0 as u64,
-        turns: Default::default(),
-        prompt_tokens: 0,
-        is_authorized,
-        openai_api_key: open_ai_api_key,
-        system_prompt,
-    };
+        let history = {
+            // Fetch latest messages first so we can stop once the token budget is exceeded,
+            // then restore chronological order for conversation reconstruction.
+            let mut stmt = conn.prepare(
+                "SELECT tokens, role, text FROM history WHERE chat_id = ?1 ORDER BY id DESC",
+            )?;
 
-    {
-        // Fetch latest messages first so we can stop once the token budget is exceeded,
-        // then restore chronological order for conversation reconstruction.
-        let mut stmt = conn.prepare(
-            "SELECT tokens, role, text FROM history WHERE chat_id = ?1 ORDER BY id DESC",
-        )?;
+            let rows = stmt.query_map([chat_id.0], |row| {
+                let tokens: usize = row.get(0)?;
+                let role: u8 = row.get(1)?;
+                let text: String = row.get(2)?;
+                Ok((
+                    MessageRole::try_from(role).expect("Invalid message role"),
+                    conversation::Message::with_text_and_tokens(text, tokens),
+                ))
+            })?;
 
-        let rows = stmt.query_map([chat_id.0], |row| {
-            let tokens: usize = row.get(0)?;
-            let role: u8 = row.get(1)?;
-            let text: String = row.get(2)?;
-            Ok((
-                MessageRole::try_from(role).expect("Invalid message role"),
-                conversation::Message::with_text_and_tokens(text, tokens),
-            ))
-        })?;
+            let mut history: Vec<(MessageRole, conversation::Message)> = Vec::new();
+            let mut total_tokens: usize = 0;
 
-        let mut collected: Vec<(MessageRole, conversation::Message)> = Vec::new();
-        let mut total_tokens: usize = 0;
-
-        for row in rows {
-            if let Ok((role, message)) = row {
-                total_tokens += message.tokens;
-                collected.push((role, message));
-                if total_tokens > max_tokens {
-                    break;
+            for row in rows {
+                if let Ok((role, message)) = row {
+                    // Stop before adding a message that would push us over the budget.
+                    if total_tokens + message.tokens > max_tokens {
+                        break;
+                    }
+                    total_tokens += message.tokens;
+                    history.push((role, message));
                 }
             }
-        }
 
-        let mut user_message: Option<conversation::Message> = None;
+            history
+        };
 
-        // We iterated newest-to-oldest; restore to oldest-first.
-        for (role, message) in collected.into_iter().rev() {
-            conv.prompt_tokens += message.tokens;
+        (conversation, history)
+    };
 
-            match role {
-                MessageRole::User => {
-                    user_message = Some(message);
-                }
-                MessageRole::Assistant => {
-                    conv.add_turn(ChatTurn {
-                        user: user_message.take().expect("Missing user message"),
-                        assistant: message,
-                    });
-                }
-                _ => {
-                    log::error!("Invalid message role in DB for chat {}", chat_id);
-                    panic!("Invalid message role");
-                }
+    let mut user_message: Option<conversation::Message> = None;
+
+    // We iterated newest-to-oldest; restore to oldest-first.
+    for (role, message) in history.into_iter().rev() {
+        conversation.prompt_tokens += message.tokens;
+
+        match role {
+            MessageRole::User => {
+                user_message = Some(message);
+            }
+            MessageRole::Assistant => {
+                conversation.add_turn(ChatTurn {
+                    user: user_message.take().expect("Missing user message"),
+                    assistant: message,
+                });
+            }
+            _ => {
+                log::error!("Invalid message role in DB for chat {}", chat_id);
+                panic!("Invalid message role");
             }
         }
+    }
 
-        // Drop a trailing user message without assistant to avoid panic on malformed history.
-        if let Some(unpaired) = user_message.take() {
-            log::warn!(
-                "Dropping trailing user message without assistant response for chat {}",
-                chat_id
-            );
-            conv.prompt_tokens = conv.prompt_tokens.saturating_sub(unpaired.tokens);
-        }
+    // Drop a trailing user message without assistant to avoid panic on malformed history.
+    if let Some(unpaired) = user_message.take() {
+        log::warn!(
+            "Dropping trailing user message without assistant response for chat {}",
+            chat_id
+        );
+        conversation.prompt_tokens = conversation.prompt_tokens.saturating_sub(unpaired.tokens);
     }
 
     log::info!(
         "Loaded conversation {} with {} messages and {} tokens",
-        conv.chat_id,
-        conv.turns.len() * 2,
-        conv.prompt_tokens
+        conversation.chat_id,
+        conversation.turns.len() * 2,
+        conversation.prompt_tokens
     );
 
-    Ok(conv)
+    Ok(conversation)
 }
 
 pub async fn add_chat_turn(
