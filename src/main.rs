@@ -1,3 +1,5 @@
+#![allow(unused_imports)]
+
 mod conversation;
 mod openai_api;
 mod typing;
@@ -5,6 +7,8 @@ mod typing;
 use conversation::{Conversation, TokenCounter};
 use flexi_logger::{Cleanup, Criterion, Duplicate, FileSpec, Logger, Naming};
 use openai_api::send_with_web_search;
+use std::clone;
+use std::fmt::Debug;
 use std::{collections::HashMap, sync::Arc};
 use teloxide::{
     prelude::*,
@@ -18,6 +22,7 @@ type DynError = Box<dyn std::error::Error + Send + Sync>;
 const DEFAULT_MODEL: &str = "gpt-4.1";
 const DEFAULT_MAX_PROMPT_TOKENS: usize = 120_000;
 
+#[derive(Clone)]
 struct App {
     bot: Bot,
     http_client: Arc<reqwest::Client>,
@@ -34,13 +39,8 @@ async fn main() -> Result<(), DynError> {
     let app = init()?;
 
     teloxide::repl(app.bot.clone(), move |bot: Bot, msg: Message| {
-        let model = model.clone();
-        let system_prompt = system_prompt.clone();
-        let tokenizer = tokenizer.clone();
-        let system_prompt_tokens = system_prompt_tokens;
-        let max_prompt_tokens = max_prompt_tokens;
-        let conversations = conversations.clone();
-        let http_client = http_client.clone();
+        let app = app.clone();
+
         async move {
             if let Some(text) = msg.text() {
                 let user_text = text.to_owned();
@@ -48,22 +48,29 @@ async fn main() -> Result<(), DynError> {
                 let message_id = msg.id;
                 let typing_guard = TypingIndicator::new(bot.clone(), chat_id);
                 let (turn_id, prompt_tokens, history_messages) = {
-                    let mut conv_map = conversations.lock().await;
+                    let mut conv_map = app.conversations.lock().await;
                     let conversation = conv_map
                         .entry(chat_id)
                         .or_insert_with(Conversation::default);
-                    let turn_id = conversation.record_user_message(&tokenizer, user_text.clone());
-                    conversation.prune_to_token_budget(max_prompt_tokens, system_prompt_tokens);
+                    let turn_id =
+                        conversation.record_user_message(&app.tokenizer, user_text.clone());
+                    conversation
+                        .prune_to_token_budget(app.max_prompt_tokens, app.system_prompt_tokens);
                     let history = conversation.messages();
-                    let prompt_tokens = conversation.prompt_token_count() + system_prompt_tokens;
+                    let prompt_tokens =
+                        conversation.prompt_token_count() + app.system_prompt_tokens;
+
                     (turn_id, prompt_tokens, history)
                 };
-                log::debug!("chat {chat_id} prompt tokens: {prompt_tokens}/{max_prompt_tokens}");
+                log::debug!(
+                    "chat {chat_id} prompt tokens: {prompt_tokens}/{max_prompt_tokens}",
+                    max_prompt_tokens = app.max_prompt_tokens
+                );
 
                 let llm_result = send_with_web_search(
-                    &http_client,
-                    &model,
-                    system_prompt.as_deref(),
+                    &app.http_client,
+                    &app.model,
+                    app.system_prompt.as_deref(),
                     &history_messages,
                 )
                 .await;
@@ -72,12 +79,13 @@ async fn main() -> Result<(), DynError> {
                 match llm_result {
                     Ok(answer) => {
                         bot.send_message(chat_id, answer.clone()).await?;
-                        let mut conv_map = conversations.lock().await;
+                        let mut conv_map = app.conversations.lock().await;
                         let conversation = conv_map
                             .get_mut(&chat_id)
                             .expect("conversation should exist");
-                        conversation.record_assistant_response(&tokenizer, turn_id, answer);
-                        conversation.prune_to_token_budget(max_prompt_tokens, system_prompt_tokens);
+                        conversation.record_assistant_response(&app.tokenizer, turn_id, answer);
+                        conversation
+                            .prune_to_token_budget(app.max_prompt_tokens, app.system_prompt_tokens);
                     }
                     Err(err) => {
                         log::error!("failed to get llm response: {err}");
@@ -93,7 +101,7 @@ async fn main() -> Result<(), DynError> {
                                 "failed to set failure reaction for chat {chat_id}: {reaction_err}"
                             );
                         }
-                        let mut conv_map = conversations.lock().await;
+                        let mut conv_map = app.conversations.lock().await;
                         let conversation = conv_map
                             .get_mut(&chat_id)
                             .expect("conversation should exist");
@@ -160,4 +168,19 @@ fn init() -> anyhow::Result<App, anyhow::Error> {
         max_prompt_tokens,
         conversations,
     })
+}
+
+impl Debug for App {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("App")
+            .field("bot", &self.bot)
+            .field("http_client", &self.http_client)
+            .field("model", &self.model)
+            // .field("tokenizer", &self.tokenizer)
+            .field("system_prompt", &self.system_prompt)
+            .field("system_prompt_tokens", &self.system_prompt_tokens)
+            .field("max_prompt_tokens", &self.max_prompt_tokens)
+            .field("conversations", &self.conversations)
+            .finish()
+    }
 }

@@ -2,6 +2,7 @@ use log::warn;
 use std::{collections::VecDeque, sync::Arc};
 use tiktoken_rs::{CoreBPE, get_bpe_from_model, o200k_base};
 
+#[derive(Debug)]
 pub struct HistoryMessage {
     pub role: MessageRole,
     pub text: String,
@@ -19,6 +20,7 @@ pub enum MessageRole {
     User,
     Assistant,
 }
+
 #[derive(Debug)]
 struct ChatTurn {
     id: u64,

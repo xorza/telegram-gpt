@@ -3,6 +3,12 @@ use crate::conversation::{HistoryMessage, MessageRole};
 use reqwest::Client;
 use serde_json::{Value, json};
 
+#[derive(Debug)]
+enum ContentType {
+    Input,
+    Output,
+}
+
 pub async fn send_with_web_search(
     http: &Client,
     model: &str,
@@ -38,10 +44,10 @@ pub async fn send_with_web_search(
         "tools": [
             {
                 "type": "web_search",
-                "user_location": {
-                    "type": "approximate",
-                    "country": "US"
-                }
+                // "user_location": {
+                //     "type": "approximate",
+                //     "country": "US"
+                // }
             }
         ],
         "tool_choice": "auto"
@@ -89,11 +95,6 @@ fn text_content(role: &str, text: &str, content_type: ContentType) -> Value {
             }
         ]
     })
-}
-
-enum ContentType {
-    Input,
-    Output,
 }
 
 fn extract_output_text(value: &Value) -> Option<String> {
