@@ -7,10 +7,7 @@ mod typing;
 
 use anyhow::{Context, anyhow};
 use conversation::{ChatTurn, Conversation, MessageRole, TokenCounter};
-use db::init_db;
-use db::load_conversation;
 use flexi_logger::{Cleanup, Criterion, Duplicate, FileSpec, Logger, Naming};
-use openai_api::{context_length, send_with_web_search};
 use reqwest::header::PROXY_AUTHENTICATE;
 use rusqlite::Connection;
 use serde_json::Value;
@@ -36,7 +33,6 @@ struct App {
     http_client: Arc<reqwest::Client>,
     model: String,
     tokenizer: Arc<TokenCounter>,
-    system_prompt: Option<conversation::Message>,
     max_prompt_tokens: usize,
     conversations: Arc<Mutex<HashMap<ChatId, Conversation>>>,
     db: Arc<Mutex<Connection>>,
@@ -79,34 +75,35 @@ async fn process_message(app: App, bot: Bot, msg: Message) -> anyhow::Result<()>
 
     log::info!("received message {message_id} from chat {chat_id}");
 
-    let (user_message, llm_result) = {
-        let _typing_indicator = TypingIndicator::new(bot.clone(), chat_id);
+    let typing_indicator = TypingIndicator::new(bot.clone(), chat_id);
 
+    let (user_message, payload, openai_api_key) = {
         let mut conversation = app.get_conversation(chat_id).await?;
         if !conversation.is_authorized {
-            let error = format!("Unauthorized user");
+            let error = format!("Unauthorized user {}", chat_id);
             log::warn!("{}", error);
             return Err(anyhow::anyhow!(error));
         }
 
         let user_message = conversation::Message::with_text(user_text, &app.tokenizer);
 
-        let system_prompt_tokens = app.system_prompt.as_ref().map_or(0, |p| p.tokens);
+        let system_prompt_tokens = conversation.system_prompt.as_ref().map_or(0, |p| p.tokens);
         conversation.prune_to_token_budget(
             app.max_prompt_tokens - system_prompt_tokens - user_message.tokens,
         );
 
-        let llm_result = send_with_web_search(
-            &app.http_client,
+        let payload = openai_api::prepare_payload(
             &app.model,
-            app.system_prompt.as_ref(),
+            conversation.system_prompt.as_ref(),
             &conversation,
             &user_message,
-        )
-        .await;
+        );
 
-        (user_message, llm_result)
+        (user_message, payload, conversation.openai_api_key.clone())
     };
+
+    let llm_result = openai_api::send(&app.http_client, &openai_api_key, payload).await;
+    drop(typing_indicator);
 
     {
         let mut conversation = app.get_conversation(chat_id).await?;
@@ -158,14 +155,10 @@ async fn init() -> anyhow::Result<App, anyhow::Error> {
     let model =
         std::env::var("OPEN_AI_MODEL").unwrap_or_else(|_| DEFAULT_OPEN_AI_MODEL.to_string());
     let tokenizer = Arc::new(TokenCounter::new(&model));
-    let system_prompt = std::env::var("OPEN_AI_SYSTEM_PROMPT")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .and_then(|s| Some(conversation::Message::with_text(s, &tokenizer)));
 
-    let max_prompt_tokens = context_length(&model);
+    let max_prompt_tokens = openai_api::context_length(&model);
 
-    let db = Arc::new(Mutex::new(init_db()?));
+    let db = Arc::new(Mutex::new(db::init_db()?));
 
     let conversations: Arc<Mutex<HashMap<ChatId, Conversation>>> =
         Arc::new(Mutex::new(HashMap::new()));
@@ -177,7 +170,6 @@ async fn init() -> anyhow::Result<App, anyhow::Error> {
         http_client,
         model,
         tokenizer,
-        system_prompt,
         max_prompt_tokens,
         conversations,
         db,
@@ -190,8 +182,7 @@ impl Debug for App {
             .field("bot", &self.bot)
             .field("http_client", &self.http_client)
             .field("model", &self.model)
-            // .field("tokenizer", &self.tokenizer)
-            .field("system_prompt", &self.system_prompt)
+            .field("tokenizer", &"?")
             .field("max_prompt_tokens", &self.max_prompt_tokens)
             .field("conversations", &self.conversations)
             .finish()
@@ -206,7 +197,7 @@ impl App {
         let mut conv_map = self.conversations.lock().await;
 
         if !conv_map.contains_key(&chat_id) {
-            let conv = load_conversation(&self.db, chat_id).await?;
+            let conv = db::load_conversation(&self.db, chat_id, &self.tokenizer).await?;
             conv_map.insert(chat_id, conv);
         }
 

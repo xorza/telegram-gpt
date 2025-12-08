@@ -8,6 +8,8 @@ pub struct Conversation {
     pub turns: VecDeque<ChatTurn>,
     pub prompt_tokens: usize,
     pub is_authorized: bool,
+    pub openai_api_key: String,
+    pub system_prompt: Option<Message>,
 }
 
 #[derive(Debug, Clone)]

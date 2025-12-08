@@ -1,4 +1,4 @@
-use crate::conversation::{ChatTurn, Conversation, Message, MessageRole};
+use crate::conversation::{self, ChatTurn, Conversation, MessageRole, TokenCounter};
 use anyhow::Result;
 use rusqlite::{Connection, Error as SqliteError};
 use std::sync::Arc;
@@ -20,7 +20,7 @@ pub fn init_db() -> Result<Connection> {
     let conn = Connection::open(&db_path)?;
 
     // Enable WAL for better concurrency; ignore errors silently.
-    let _ = conn.pragma_update(None, "journal_mode", "WAL");
+    // let _ = conn.pragma_update(None, "journal_mode", "WAL");
 
     match std::env::var("DB_ENCRYPTION_KEY") {
         Ok(key) if !key.is_empty() => conn.pragma_update(None, "key", &key)?,
@@ -81,14 +81,15 @@ fn set_schema_version(conn: &Connection, version: i32) -> Result<(), SqliteError
 pub async fn load_conversation(
     db: &Arc<Mutex<Connection>>,
     chat_id: ChatId,
+    tokenizer: &TokenCounter,
 ) -> anyhow::Result<Conversation> {
     let conn = db.lock().await;
 
-    let (is_authorized, _open_ai_api_key, _system_prompt) = {
+    let (is_authorized, open_ai_api_key, system_prompt) = {
         // Fetch exactly one chat row; panic if multiple rows are found.
         let mut stmt = conn.prepare(
             "SELECT is_authorized, open_ai_api_key, system_prompt \
-         FROM chats WHERE chat_id = ?1 LIMIT 2",
+            FROM chats WHERE chat_id = ?1 LIMIT 2",
         )?;
         let mut rows = stmt.query([chat_id.0])?;
 
@@ -126,6 +127,8 @@ pub async fn load_conversation(
         turns: Default::default(),
         prompt_tokens: 0,
         is_authorized,
+        openai_api_key: open_ai_api_key,
+        system_prompt: Some(conversation::Message::with_text(system_prompt, tokenizer)),
     };
 
     {
@@ -138,11 +141,11 @@ pub async fn load_conversation(
             let text: String = row.get(2)?;
             Ok((
                 MessageRole::try_from(role).expect("Invalid message role"),
-                Message::with_text_and_tokens(text, tokens),
+                conversation::Message::with_text_and_tokens(text, tokens),
             ))
         })?;
 
-        let mut user_message: Option<Message> = None;
+        let mut user_message: Option<conversation::Message> = None;
         for row in rows {
             if let Ok((role, message)) = row {
                 conv.prompt_tokens += message.tokens;
@@ -213,5 +216,8 @@ pub async fn add_chat_turn(
     )?;
 
     tx.commit()?;
+
+    log::info!("Added chat turn to conversation {}", chat_id);
+
     Ok(())
 }

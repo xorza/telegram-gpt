@@ -4,7 +4,8 @@ use crate::DynError;
 use crate::conversation::{Conversation, Message, MessageRole};
 use anyhow::{Context, anyhow};
 use reqwest::Client;
-use serde_json::{Value, json};
+use rusqlite::OpenFlags;
+use serde_json::json;
 
 #[derive(Debug)]
 enum ContentType {
@@ -12,13 +13,12 @@ enum ContentType {
     Output,
 }
 
-pub async fn send_with_web_search(
-    http: &Client,
+pub fn prepare_payload(
     model: &str,
     system_prompt: Option<&Message>,
     conversation: &Conversation,
     user_message: &Message,
-) -> anyhow::Result<String, DynError> {
+) -> serde_json::Value {
     let mut input_items = Vec::new();
 
     if let Some(prompt) = system_prompt {
@@ -47,11 +47,7 @@ pub async fn send_with_web_search(
         ContentType::Input,
     ));
 
-    if input_items.is_empty() {
-        return Err("no content available for OpenAI call".into());
-    }
-
-    let payload = json!({
+    json!({
         "model": model,
         "input": input_items,
         "tools": [
@@ -64,9 +60,14 @@ pub async fn send_with_web_search(
             }
         ],
         "tool_choice": "auto"
-    });
+    })
+}
 
-    let api_key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY is required");
+pub async fn send(
+    http: &Client,
+    api_key: &str,
+    payload: serde_json::Value,
+) -> anyhow::Result<String, DynError> {
     let response = http
         .post("https://api.openai.com/v1/responses")
         .bearer_auth(api_key)
@@ -81,7 +82,7 @@ pub async fn send_with_web_search(
         return Err(format!("OpenAI Responses API error {status}: {body_text}").into());
     }
 
-    let response_body: Value = serde_json::from_str(&body_text)?;
+    let response_body: serde_json::Value = serde_json::from_str(&body_text)?;
 
     if let Some(text) = extract_output_text(&response_body) {
         let trimmed = text.trim();
@@ -93,7 +94,7 @@ pub async fn send_with_web_search(
     Err(format!("OpenAI response missing text output: {response_body}").into())
 }
 
-fn text_content(role: MessageRole, text: &str, content_type: ContentType) -> Value {
+fn text_content(role: MessageRole, text: &str, content_type: ContentType) -> serde_json::Value {
     let type_str = match content_type {
         ContentType::Input => "input_text",
         ContentType::Output => "output_text",
@@ -110,7 +111,7 @@ fn text_content(role: MessageRole, text: &str, content_type: ContentType) -> Val
     })
 }
 
-fn extract_output_text(value: &Value) -> Option<String> {
+fn extract_output_text(value: &serde_json::Value) -> Option<String> {
     if let Some(array) = value.get("output_text").and_then(|v| v.as_array()) {
         if !array.is_empty() {
             return Some(
