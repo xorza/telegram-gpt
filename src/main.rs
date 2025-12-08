@@ -9,10 +9,11 @@ use conversation::{Conversation, MessageRole, TokenCounter, TokenizedMessage};
 use flexi_logger::{Cleanup, Criterion, Duplicate, FileSpec, Logger, Naming};
 use openai_api::{context_length, send_with_web_search};
 use reqwest::header::PROXY_AUTHENTICATE;
+use rusqlite::Connection;
 use serde_json::Value;
 use std::clone;
 use std::fmt::Debug;
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, path::Path, sync::Arc};
 use teloxide::types::CopyTextButton;
 use teloxide::{
     prelude::*,
@@ -34,6 +35,8 @@ struct App {
     system_prompt: Option<TokenizedMessage>,
     max_prompt_tokens: usize,
     conversations: Arc<Mutex<HashMap<ChatId, Conversation>>>,
+    #[allow(dead_code)]
+    db: Arc<Mutex<Connection>>,
 }
 
 #[tokio::main]
@@ -59,7 +62,7 @@ async fn main() -> Result<(), DynError> {
             let message_id = msg.id;
 
             let (turn_id, llm_result) = {
-                let _ = TypingIndicator::new(bot.clone(), chat_id);
+                let _typing_indicator = TypingIndicator::new(bot.clone(), chat_id);
 
                 let mut conversation = app.get_conversation(chat_id).await;
                 let turn_id = conversation.record_user_message(&app.tokenizer, user_text);
@@ -136,8 +139,9 @@ async fn init() -> anyhow::Result<App, anyhow::Error> {
         .filter(|s| !s.is_empty())
         .and_then(|s| Some(TokenizedMessage::new(s, &tokenizer)));
 
-    // Prefer model's advertised context window, fall back to default.
     let max_prompt_tokens = context_length(&model);
+
+    let db = Arc::new(Mutex::new(init_db()?));
 
     let conversations: Arc<Mutex<HashMap<ChatId, Conversation>>> =
         Arc::new(Mutex::new(HashMap::new()));
@@ -152,6 +156,7 @@ async fn init() -> anyhow::Result<App, anyhow::Error> {
         system_prompt,
         max_prompt_tokens,
         conversations,
+        db,
     })
 }
 
@@ -178,4 +183,27 @@ impl App {
             map.entry(chat_id).or_insert_with(Conversation::default)
         })
     }
+}
+
+fn init_db() -> anyhow::Result<Connection> {
+    let db_path = std::env::var("SQLITE_PATH").unwrap_or_else(|_| "data/bot.db".to_string());
+
+    // Ensure parent directory exists
+    if let Some(parent) = std::path::Path::new(&db_path).parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+
+    let conn = Connection::open(&db_path)?;
+
+    // Enable WAL for better concurrency; ignore errors silently.
+    let _ = conn.pragma_update(None, "journal_mode", "WAL");
+
+    match std::env::var("DB_ENCRYPTION_KEY") {
+        Ok(key) if !key.is_empty() => conn.pragma_update(None, "key", &key)?,
+        _ => log::warn!("DB_ENCRYPTION_KEY not set; database will be unencrypted"),
+    }
+
+    Ok(conn)
 }
