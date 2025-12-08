@@ -26,6 +26,7 @@ use typing::TypingIndicator;
 type DynError = Box<dyn std::error::Error + Send + Sync>;
 
 const DEFAULT_OPEN_AI_MODEL: &str = "gpt-4.1";
+const TELEGRAM_MAX_MESSAGE_LENGTH: usize = 4096;
 
 #[derive(Clone)]
 struct App {
@@ -118,7 +119,9 @@ async fn process_message(app: App, bot: Bot, msg: Message) -> anyhow::Result<()>
                 };
                 conversation.add_turn(turn.clone());
 
-                bot.send_message(chat_id, answer).await?;
+                for chunk in split_message(&answer) {
+                    bot.send_message(chat_id, chunk).await?;
+                }
                 db::add_chat_turn(&app.db, chat_id, turn).await?;
             }
             Err(err) => {
@@ -174,6 +177,32 @@ async fn init() -> anyhow::Result<App, anyhow::Error> {
         conversations,
         db,
     })
+}
+
+fn split_message(text: &str) -> Vec<String> {
+    if text.is_empty() {
+        return vec![String::new()];
+    }
+
+    let mut chunks = Vec::new();
+    let mut buffer = String::new();
+    let mut buffer_len = 0;
+
+    for ch in text.chars() {
+        if buffer_len == TELEGRAM_MAX_MESSAGE_LENGTH {
+            chunks.push(std::mem::take(&mut buffer));
+            buffer_len = 0;
+        }
+
+        buffer.push(ch);
+        buffer_len += 1;
+    }
+
+    if !buffer.is_empty() {
+        chunks.push(buffer);
+    }
+
+    chunks
 }
 
 impl Debug for App {
