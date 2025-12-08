@@ -1,7 +1,7 @@
 use std::panic::AssertUnwindSafe;
 
 use crate::DynError;
-use crate::conversation::{Conversation, MessageRole, TokenizedMessage};
+use crate::conversation::{Conversation, MessageRole, Message};
 use anyhow::{Context, anyhow};
 use reqwest::Client;
 use serde_json::{Value, json};
@@ -15,9 +15,9 @@ enum ContentType {
 pub async fn send_with_web_search(
     http: &Client,
     model: &str,
-    system_prompt: Option<&TokenizedMessage>,
+    system_prompt: Option<&Message>,
     conversation: &Conversation,
-) -> Result<String, DynError> {
+) -> anyhow::Result<String, DynError> {
     let mut input_items = Vec::new();
 
     if let Some(prompt) = system_prompt {

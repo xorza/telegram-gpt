@@ -2,31 +2,34 @@ use log::warn;
 use std::{collections::VecDeque, fmt::Display, sync::Arc};
 use tiktoken_rs::{CoreBPE, get_bpe_from_model, o200k_base};
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Conversation {
-    next_turn_id: u64,
+    pub next_turn_id: u64,
+    pub chat_id: u64,
     pub turns: VecDeque<ChatTurn>,
     pub prompt_tokens: usize,
+    pub is_authorized: bool,
 }
 
 #[derive(Debug)]
 pub struct ChatTurn {
-    id: u64,
-    pub user: TokenizedMessage,
-    pub assistant: Option<TokenizedMessage>,
+    pub id: u64,
+    pub user: Message,
+    pub assistant: Option<Message>,
 }
 
 #[derive(Debug, Clone)]
-pub struct TokenizedMessage {
+pub struct Message {
     pub text: String,
     pub tokens: usize,
 }
 
 #[derive(Debug, Clone)]
+#[repr(u8)]
 pub enum MessageRole {
-    System,
-    User,
-    Assistant,
+    System = 0,
+    User = 1,
+    Assistant = 2,
 }
 
 #[derive(Clone)]
@@ -35,29 +38,22 @@ pub struct TokenCounter {
 }
 
 impl Conversation {
-    pub fn record_user_message(&mut self, tokenizer: &TokenCounter, user_text: String) -> u64 {
+    pub fn record_user_message(&mut self, message: Message) -> u64 {
         let turn_id = self.next_turn_id;
         self.next_turn_id += 1;
-        let user = TokenizedMessage::new(user_text, tokenizer);
-        self.prompt_tokens += user.tokens;
+        self.prompt_tokens += message.tokens;
         self.turns.push_back(ChatTurn {
             id: turn_id,
-            user,
+            user: message,
             assistant: None,
         });
         turn_id
     }
 
-    pub fn record_assistant_response(
-        &mut self,
-        tokenizer: &TokenCounter,
-        turn_id: u64,
-        answer: String,
-    ) {
+    pub fn record_assistant_response(&mut self, turn_id: u64, message: Message) {
         if let Some(turn) = self.turns.iter_mut().find(|turn| turn.id == turn_id) {
-            let assistant = TokenizedMessage::new(answer, tokenizer);
-            self.prompt_tokens += assistant.tokens;
-            turn.assistant = Some(assistant);
+            self.prompt_tokens += message.tokens;
+            turn.assistant = Some(message);
         }
     }
 
@@ -108,10 +104,13 @@ impl ChatTurn {
     }
 }
 
-impl TokenizedMessage {
-    pub fn new(text: String, tokenizer: &TokenCounter) -> Self {
-        let tokens = tokenizer.count_text(&text);
+impl Message {
+    pub fn with_text_and_tokens(text: String, tokens: usize) -> Self {
         Self { text, tokens }
+    }
+    pub fn with_text(text: String, tokenizer: &TokenCounter) -> Self {
+        let tokens = tokenizer.count_text(&text);
+        Self::with_text_and_tokens(text, tokens)
     }
 }
 
@@ -135,6 +134,18 @@ impl Display for MessageRole {
             MessageRole::System => write!(f, "develope"),
             MessageRole::User => write!(f, "user"),
             MessageRole::Assistant => write!(f, "assistant"),
+        }
+    }
+}
+impl TryFrom<u8> for MessageRole {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(MessageRole::System),
+            1 => Ok(MessageRole::User),
+            2 => Ok(MessageRole::Assistant),
+            _ => Err(()),
         }
     }
 }
