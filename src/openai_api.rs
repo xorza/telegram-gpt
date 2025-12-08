@@ -1,5 +1,7 @@
+use std::panic::AssertUnwindSafe;
+
 use crate::DynError;
-use crate::conversation::{HistoryMessage, MessageRole, TokenizedMessage};
+use crate::conversation::{Conversation, MessageRole, TokenizedMessage};
 use reqwest::Client;
 use serde_json::{Value, json};
 
@@ -13,22 +15,30 @@ pub async fn send_with_web_search(
     http: &Client,
     model: &str,
     system_prompt: Option<&TokenizedMessage>,
-    messages: &[HistoryMessage],
+    conversation: &Conversation,
 ) -> Result<String, DynError> {
     let mut input_items = Vec::new();
 
     if let Some(prompt) = system_prompt {
-        input_items.push(text_content("developer", &prompt.text, ContentType::Input));
+        input_items.push(text_content(
+            MessageRole::System,
+            &prompt.text,
+            ContentType::Input,
+        ));
     }
 
-    for message in messages {
-        let (role, content_type) = match message.role {
-            MessageRole::User => ("user", ContentType::Input),
-            MessageRole::Assistant => ("assistant", ContentType::Output),
-        };
-
-        if !message.text.trim().is_empty() {
-            input_items.push(text_content(role, &message.text, content_type));
+    for turn in &conversation.turns {
+        input_items.push(text_content(
+            MessageRole::User,
+            &turn.user.text,
+            ContentType::Input,
+        ));
+        if let Some(assistant) = &turn.assistant {
+            input_items.push(text_content(
+                MessageRole::Assistant,
+                &assistant.text,
+                ContentType::Output,
+            ));
         }
     }
 
@@ -78,14 +88,14 @@ pub async fn send_with_web_search(
     Err(format!("OpenAI response missing text output: {response_body}").into())
 }
 
-fn text_content(role: &str, text: &str, content_type: ContentType) -> Value {
+fn text_content(role: MessageRole, text: &str, content_type: ContentType) -> Value {
     let type_str = match content_type {
         ContentType::Input => "input_text",
         ContentType::Output => "output_text",
     };
 
     json!({
-        "role": role,
+        "role": role.to_string(),
         "content": [
             {
                 "type": type_str,

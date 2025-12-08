@@ -1,19 +1,19 @@
 use log::warn;
-use std::{collections::VecDeque, sync::Arc};
+use std::{collections::VecDeque, fmt::Display, sync::Arc};
 use tiktoken_rs::{CoreBPE, get_bpe_from_model, o200k_base};
 
 #[derive(Debug, Default)]
 pub struct Conversation {
     next_turn_id: u64,
-    turns: VecDeque<ChatTurn>,
-    prompt_tokens: usize,
+    pub turns: VecDeque<ChatTurn>,
+    pub prompt_tokens: usize,
 }
 
 #[derive(Debug)]
-struct ChatTurn {
+pub struct ChatTurn {
     id: u64,
-    user: TokenizedMessage,
-    assistant: Option<TokenizedMessage>,
+    pub user: TokenizedMessage,
+    pub assistant: Option<TokenizedMessage>,
 }
 
 #[derive(Debug, Clone)]
@@ -22,14 +22,9 @@ pub struct TokenizedMessage {
     pub tokens: usize,
 }
 
-#[derive(Debug)]
-pub struct HistoryMessage {
-    pub role: MessageRole,
-    pub text: String,
-}
-
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum MessageRole {
+    System,
     User,
     Assistant,
 }
@@ -76,29 +71,12 @@ impl Conversation {
         }
     }
 
-    pub fn messages(&self) -> Vec<HistoryMessage> {
-        let mut history = Vec::with_capacity(self.turns.len() * 2);
-        for turn in &self.turns {
-            history.push(HistoryMessage::new(
-                MessageRole::User,
-                turn.user.text.clone(),
-            ));
-            if let Some(assistant) = &turn.assistant {
-                history.push(HistoryMessage::new(
-                    MessageRole::Assistant,
-                    assistant.text.clone(),
-                ));
-            }
-        }
-        history
-    }
-
     pub fn prompt_token_count(&self) -> usize {
         self.prompt_tokens
     }
 
-    pub fn prune_to_token_budget(&mut self, max_prompt_tokens: usize, system_prompt_tokens: usize) {
-        while self.prompt_tokens + system_prompt_tokens > max_prompt_tokens {
+    pub fn prune_to_token_budget(&mut self, max_prompt_tokens: usize) {
+        while self.prompt_tokens > max_prompt_tokens {
             if self
                 .turns
                 .front()
@@ -111,17 +89,11 @@ impl Conversation {
             } else {
                 warn!(
                     "token budget exceeded but no complete turns left to drop (need <= {max_prompt_tokens}, have {})",
-                    self.prompt_tokens + system_prompt_tokens
+                    self.prompt_tokens
                 );
                 break;
             }
         }
-    }
-}
-
-impl HistoryMessage {
-    fn new(role: MessageRole, text: String) -> Self {
-        Self { role, text }
     }
 }
 
@@ -154,5 +126,15 @@ impl TokenCounter {
 
     pub fn count_text(&self, text: &str) -> usize {
         self.bpe.encode_with_special_tokens(text).len()
+    }
+}
+
+impl Display for MessageRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MessageRole::System => write!(f, "develope"),
+            MessageRole::User => write!(f, "user"),
+            MessageRole::Assistant => write!(f, "assistant"),
+        }
     }
 }

@@ -4,9 +4,10 @@ mod conversation;
 mod openai_api;
 mod typing;
 
-use conversation::{Conversation, TokenCounter, TokenizedMessage};
+use conversation::{Conversation, MessageRole, TokenCounter, TokenizedMessage};
 use flexi_logger::{Cleanup, Criterion, Duplicate, FileSpec, Logger, Naming};
 use openai_api::send_with_web_search;
+use reqwest::header::PROXY_AUTHENTICATE;
 use std::clone;
 use std::fmt::Debug;
 use std::{collections::HashMap, sync::Arc};
@@ -56,32 +57,31 @@ async fn main() -> Result<(), DynError> {
             let chat_id = msg.chat.id;
             let message_id = msg.id;
 
-            let typing_guard = TypingIndicator::new(bot.clone(), chat_id);
+            let (turn_id, llm_result) = {
+                let _ = TypingIndicator::new(bot.clone(), chat_id);
 
-            let (turn_id, prompt_tokens, history_messages) = {
                 let mut conversation = app.get_conversation(chat_id).await;
-                let turn_id = conversation.record_user_message(&app.tokenizer, user_text.clone());
+                let turn_id = conversation.record_user_message(&app.tokenizer, user_text);
+
                 let system_prompt_tokens = app.system_prompt.as_ref().map_or(0, |p| p.tokens);
-                conversation.prune_to_token_budget(app.max_prompt_tokens, system_prompt_tokens);
-                let history = conversation.messages();
-                let prompt_tokens = conversation.prompt_token_count() + system_prompt_tokens;
+                conversation.prune_to_token_budget(app.max_prompt_tokens - system_prompt_tokens);
 
-                (turn_id, prompt_tokens, history)
+                log::debug!(
+                    "chat {chat_id} prompt tokens: {prompt_tokens}/{max_prompt_tokens}",
+                    prompt_tokens = conversation.prompt_token_count() + system_prompt_tokens,
+                    max_prompt_tokens = app.max_prompt_tokens
+                );
+
+                let llm_result = send_with_web_search(
+                    &app.http_client,
+                    &app.model,
+                    app.system_prompt.as_ref(),
+                    &conversation,
+                )
+                .await;
+
+                (turn_id, llm_result)
             };
-            log::debug!(
-                "chat {chat_id} prompt tokens: {prompt_tokens}/{max_prompt_tokens}",
-                max_prompt_tokens = app.max_prompt_tokens
-            );
-
-            let llm_result = send_with_web_search(
-                &app.http_client,
-                &app.model,
-                app.system_prompt.as_ref(),
-                &history_messages,
-            )
-            .await;
-
-            drop(typing_guard);
 
             let mut conversation = app.get_conversation(chat_id).await;
 
