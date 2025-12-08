@@ -3,3 +3,5 @@ logs/
 data/
 **/*.rs.bk
 .env
+update.sh
+tggpt.service
