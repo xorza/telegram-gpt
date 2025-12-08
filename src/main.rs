@@ -83,6 +83,11 @@ async fn process_message(app: App, bot: Bot, msg: Message) -> anyhow::Result<()>
         let _typing_indicator = TypingIndicator::new(bot.clone(), chat_id);
 
         let mut conversation = app.get_conversation(chat_id).await?;
+        if !conversation.is_authorized {
+            let error = format!("Unauthorized user");
+            log::warn!("{}", error);
+            return Err(anyhow::anyhow!(error));
+        }
 
         let message = conversation::Message::with_text(user_text, &app.tokenizer);
 
@@ -124,7 +129,7 @@ async fn process_message(app: App, bot: Bot, msg: Message) -> anyhow::Result<()>
 
                 bot.set_message_reaction(chat_id, message_id)
                     .reaction(vec![ReactionType::Emoji {
-                        emoji: "🔥".to_string(),
+                        emoji: "🖕".to_string(),
                     }])
                     .await?;
             }

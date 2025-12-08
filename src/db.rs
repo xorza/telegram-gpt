@@ -74,8 +74,13 @@ pub fn load_conversation(chat_id: ChatId, conn: &Connection) -> anyhow::Result<C
                 let r = conn.execute(
                     "INSERT INTO chats (chat_id, is_authorized, open_ai_api_key, system_prompt) \
                      VALUES (?1, ?2, ?3, ?4)",
-                    [chat_id.0, false, String::new(), String::new()],
+                    rusqlite::params![chat_id.0, false, "", ""],
                 )?;
+                if r != 1 {
+                    let error = format!("failed to insert chat row for chat_id {}", chat_id.0);
+                    log::error!("{}", error);
+                    panic!("{}", error);
+                }
 
                 (false, String::new(), String::new())
             }
@@ -92,7 +97,7 @@ pub fn load_conversation(chat_id: ChatId, conn: &Connection) -> anyhow::Result<C
         chat_id: chat_id.0 as u64,
         turns: Default::default(),
         prompt_tokens: 0,
-        is_authorized: is_authorized,
+        is_authorized,
     };
 
     {
