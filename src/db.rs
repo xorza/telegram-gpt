@@ -1,7 +1,9 @@
-use crate::conversation::{ChatTurn, Conversation, Message, MessageRole, TokenCounter};
+use crate::conversation::{ChatTurn, Conversation, Message, MessageRole};
 use anyhow::Result;
 use rusqlite::{Connection, Error as SqliteError};
+use std::sync::Arc;
 use teloxide::types::ChatId;
+use tokio::sync::Mutex;
 
 const SCHEMA_VERSION: i32 = 1;
 
@@ -76,7 +78,12 @@ fn set_schema_version(conn: &Connection, version: i32) -> Result<(), SqliteError
     conn.pragma_update(None, "user_version", version)
 }
 
-pub fn load_conversation(chat_id: ChatId, conn: &Connection) -> anyhow::Result<Conversation> {
+pub async fn load_conversation(
+    db: &Arc<Mutex<Connection>>,
+    chat_id: ChatId,
+) -> anyhow::Result<Conversation> {
+    let conn = db.lock().await;
+
     let (is_authorized, _open_ai_api_key, _system_prompt) = {
         // Fetch exactly one chat row; panic if multiple rows are found.
         let mut stmt = conn.prepare(
@@ -174,4 +181,37 @@ pub fn load_conversation(chat_id: ChatId, conn: &Connection) -> anyhow::Result<C
     );
 
     Ok(conv)
+}
+
+pub async fn add_chat_turn(
+    db: &Arc<Mutex<Connection>>,
+    chat_id: ChatId,
+    turn: ChatTurn,
+) -> anyhow::Result<()> {
+    // Ensure both user and assistant messages are persisted atomically.
+    let mut conn = db.lock().await;
+    let tx = conn.transaction()?;
+
+    tx.execute(
+        "INSERT INTO history (chat_id, tokens, role, text) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![
+            chat_id.0,
+            turn.user.tokens as i64,
+            MessageRole::User as u8,
+            turn.user.text
+        ],
+    )?;
+
+    tx.execute(
+        "INSERT INTO history (chat_id, tokens, role, text) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![
+            chat_id.0,
+            turn.assistant.tokens as i64,
+            MessageRole::Assistant as u8,
+            turn.assistant.text
+        ],
+    )?;
+
+    tx.commit()?;
+    Ok(())
 }

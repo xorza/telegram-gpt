@@ -122,7 +122,7 @@ async fn process_message(app: App, bot: Bot, msg: Message) -> anyhow::Result<()>
                 conversation.add_turn(turn.clone());
 
                 bot.send_message(chat_id, answer).await?;
-                
+                db::add_chat_turn(&app.db, chat_id, turn).await?;
             }
             Err(err) => {
                 log::error!("failed to get llm response: {err}");
@@ -206,9 +206,7 @@ impl App {
         let mut conv_map = self.conversations.lock().await;
 
         if !conv_map.contains_key(&chat_id) {
-            // Blocking DB read; acceptable given small, infrequent loads.
-            let conn = self.db.lock().await;
-            let conv = load_conversation(chat_id, &conn)?;
+            let conv = load_conversation(&self.db, chat_id).await?;
             conv_map.insert(chat_id, conv);
         }
 
