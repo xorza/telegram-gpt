@@ -85,7 +85,7 @@ impl TokenCounter {
 impl Display for MessageRole {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            MessageRole::System => write!(f, "develope"),
+            MessageRole::System => write!(f, "system"),
             MessageRole::User => write!(f, "user"),
             MessageRole::Assistant => write!(f, "assistant"),
         }
