@@ -62,6 +62,8 @@ async fn main() -> Result<(), DynError> {
             let chat_id = msg.chat.id;
             let message_id = msg.id;
 
+            log::info!("received message {message_id} from chat {chat_id}");
+
             let (turn_id, llm_result) = {
                 let _typing_indicator = TypingIndicator::new(bot.clone(), chat_id);
 

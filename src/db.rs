@@ -21,5 +21,33 @@ pub fn init_db() -> Result<Connection> {
         _ => log::warn!("DB_ENCRYPTION_KEY not set; database will be unencrypted"),
     }
 
+    // Initialize database schema
+    init_schema(&conn)?;
+
     Ok(conn)
+}
+
+fn init_schema(conn: &Connection) -> Result<(), SqliteError> {
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER NOT NULL,
+            tokens  INTEGER NOT NULL,
+            role    INTEGER NOT NULL,
+            text    TEXT NOT NULL
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS chats (
+            chat_id INTEGER PRIMARY KEY NOT NULL,
+            is_authorized BOOLEAN NOT NULL,
+            open_ai_api_key  TEXT NOT NULL,
+            system_prompt    TEXT NOT NULL
+        )",
+        [],
+    )?;
+
+    Ok(())
 }
