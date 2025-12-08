@@ -2,6 +2,7 @@ use std::panic::AssertUnwindSafe;
 
 use crate::DynError;
 use crate::conversation::{Conversation, MessageRole, TokenizedMessage};
+use anyhow::{Context, anyhow};
 use reqwest::Client;
 use serde_json::{Value, json};
 
@@ -61,7 +62,7 @@ pub async fn send_with_web_search(
         "tool_choice": "auto"
     });
 
-    let api_key = std::env::var("OPENAI_API_KEY")?;
+    let api_key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY is required");
     let response = http
         .post("https://api.openai.com/v1/responses")
         .bearer_auth(api_key)
@@ -141,4 +142,39 @@ fn extract_output_text(value: &Value) -> Option<String> {
     }
 
     None
+}
+
+pub async fn fetch_context_length(http: &reqwest::Client, model: &str) -> anyhow::Result<usize> {
+    let api_key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY is required");
+
+    let url = format!("https://api.openai.com/v1/models/{model}");
+    let resp = http
+        .get(&url)
+        .bearer_auth(api_key)
+        .send()
+        .await
+        .context("failed to call OpenAI models endpoint")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(anyhow!("model metadata request failed {status}: {body}"));
+    }
+
+    let value: Value = resp
+        .json()
+        .await
+        .context("invalid JSON in model metadata response")?;
+
+    let context_len = value
+        .get("context_length")
+        .and_then(|v| v.as_u64())
+        .or_else(|| value.get("input_token_limit").and_then(|v| v.as_u64()))
+        .or_else(|| value.get("max_context_length").and_then(|v| v.as_u64()))
+        .ok_or_else(|| anyhow!("no context length field in model metadata"))?
+        as usize;
+
+    log::info!("fetched context length for model {model}: {context_len}");
+
+    Ok(context_len)
 }

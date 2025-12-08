@@ -4,10 +4,12 @@ mod conversation;
 mod openai_api;
 mod typing;
 
+use anyhow::{Context, anyhow};
 use conversation::{Conversation, MessageRole, TokenCounter, TokenizedMessage};
 use flexi_logger::{Cleanup, Criterion, Duplicate, FileSpec, Logger, Naming};
-use openai_api::send_with_web_search;
+use openai_api::{fetch_context_length, send_with_web_search};
 use reqwest::header::PROXY_AUTHENTICATE;
+use serde_json::Value;
 use std::clone;
 use std::fmt::Debug;
 use std::{collections::HashMap, sync::Arc};
@@ -37,7 +39,7 @@ struct App {
 
 #[tokio::main]
 async fn main() -> Result<(), DynError> {
-    let app = init()?;
+    let app = init().await?;
 
     teloxide::repl(app.bot.clone(), move |bot: Bot, msg: Message| {
         let app = app.clone();
@@ -111,7 +113,7 @@ async fn main() -> Result<(), DynError> {
     Ok(())
 }
 
-fn init() -> anyhow::Result<App, anyhow::Error> {
+async fn init() -> anyhow::Result<App, anyhow::Error> {
     dotenv::dotenv().ok();
 
     // Log to rotating files capped at 10MB each, keeping the 3 newest, while also duplicating info logs to stdout.
@@ -122,7 +124,7 @@ fn init() -> anyhow::Result<App, anyhow::Error> {
             Naming::Numbers,
             Cleanup::KeepLogFiles(3),
         )
-        .duplicate_to_stdout(Duplicate::Warn)
+        .duplicate_to_stdout(Duplicate::Debug)
         .start()?;
 
     let bot = Bot::from_env();
@@ -133,6 +135,19 @@ fn init() -> anyhow::Result<App, anyhow::Error> {
         .ok()
         .filter(|s| !s.is_empty())
         .and_then(|s| Some(TokenizedMessage::new(s, &tokenizer)));
+
+    // Prefer model's advertised context window, fall back to env override or default.
+    let api_context = fetch_context_length(&http_client, &model).await;
+    if let Err(err) = &api_context {
+        log::warn!(
+            "using default prompt token budget {DEFAULT_MAX_PROMPT_TOKENS} (couldn't fetch model context: {err})"
+        );
+    }
+    let api_context = api_context.unwrap_or(DEFAULT_MAX_PROMPT_TOKENS);
+    let max_prompt_tokens = std::env::var("OPEN_AI_MAX_PROMPT_TOKENS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(api_context);
 
     let conversations: Arc<Mutex<HashMap<ChatId, Conversation>>> =
         Arc::new(Mutex::new(HashMap::new()));
@@ -145,7 +160,7 @@ fn init() -> anyhow::Result<App, anyhow::Error> {
         model,
         tokenizer,
         system_prompt,
-        max_prompt_tokens: DEFAULT_MAX_PROMPT_TOKENS,
+        max_prompt_tokens,
         conversations,
     })
 }
