@@ -24,7 +24,6 @@ use typing::TypingIndicator;
 type DynError = Box<dyn std::error::Error + Send + Sync>;
 
 const DEFAULT_OPEN_AI_MODEL: &str = "gpt-4.1";
-const DEFAULT_MAX_PROMPT_TOKENS: usize = 120_000;
 
 #[derive(Clone)]
 struct App {
@@ -138,11 +137,7 @@ async fn init() -> anyhow::Result<App, anyhow::Error> {
         .and_then(|s| Some(TokenizedMessage::new(s, &tokenizer)));
 
     // Prefer model's advertised context window, fall back to default.
-    let model_max_tokens = context_length(&model).unwrap_or(DEFAULT_MAX_PROMPT_TOKENS);
-    let max_prompt_tokens = std::env::var("OPEN_AI_MAX_PROMPT_TOKENS")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(model_max_tokens);
+    let max_prompt_tokens = context_length(&model);
 
     let conversations: Arc<Mutex<HashMap<ChatId, Conversation>>> =
         Arc::new(Mutex::new(HashMap::new()));

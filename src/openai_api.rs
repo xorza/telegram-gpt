@@ -144,13 +144,33 @@ fn extract_output_text(value: &Value) -> Option<String> {
     None
 }
 
-pub fn context_length(model: &str) -> Option<usize> {
-    // Based on OpenAI documentation as of Dec 8, 2025.
-    if model.starts_with("gpt-4.1") || model.starts_with("gpt-5.1") {
-        return Some(1_000_000); // 1M-token context window
+pub fn context_length(model: &str) -> usize {
+    // Values sourced from OpenAI model docs (Dec 8, 2025).
+    match model {
+        // GPT-5.1 flagship & codex variants (400k)
+        m if m.starts_with("gpt-5.1-codex-max")
+            || m.starts_with("gpt-5.1-codex")
+            || m.starts_with("gpt-5.1-mini")
+            || m.starts_with("gpt-5.1") =>
+        {
+            400_000
+        }
+        // GPT-5.1 chat has a smaller 128k window
+        m if m.starts_with("gpt-5.1-chat") => 128_000,
+        // GPT-5 previous generation (400k) and chat (128k)
+        m if m.starts_with("gpt-5-chat") => 128_000,
+        m if m.starts_with("gpt-5-mini") || m.starts_with("gpt-5") => 400_000,
+        // GPT-4.1 family (≈1M)
+        m if m.starts_with("gpt-4.1-nano")
+            || m.starts_with("gpt-4.1-mini")
+            || m.starts_with("gpt-4.1") =>
+        {
+            1_047_576
+        }
+        // GPT-4o family (128k) including ChatGPT alias
+        m if m.starts_with("gpt-4o") || m.starts_with("chatgpt-4o") => 128_000,
+        // Legacy GPT-4
+        m if m.starts_with("gpt-4") => 8_192,
+        _ => 64_000,
     }
-    if model.starts_with("gpt-4o") {
-        return Some(128_000); // long-context GPT-4o
-    }
-    None
 }
