@@ -123,13 +123,19 @@ pub async fn load_conversation(
         (is_authorized, open_ai_api_key, system_prompt)
     };
 
+    let system_prompt = if !system_prompt.is_empty() {
+        Some(conversation::Message::with_text(system_prompt, tokenizer))
+    } else {
+        None
+    };
+
     let mut conv = Conversation {
         chat_id: chat_id.0 as u64,
         turns: Default::default(),
         prompt_tokens: 0,
         is_authorized,
         openai_api_key: open_ai_api_key,
-        system_prompt: Some(conversation::Message::with_text(system_prompt, tokenizer)),
+        system_prompt,
     };
 
     {
