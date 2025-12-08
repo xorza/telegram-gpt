@@ -153,7 +153,7 @@ async fn init() -> anyhow::Result<App, anyhow::Error> {
     let conversations: Arc<Mutex<HashMap<ChatId, Conversation>>> =
         Arc::new(Mutex::new(HashMap::new()));
 
-    log::info!("starting tggpt bot");
+    log::info!("starting tggpt bot with model: {model}, max prompt tokens: {max_prompt_tokens}");
 
     Ok(App {
         bot,
