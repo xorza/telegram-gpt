@@ -87,7 +87,7 @@ pub async fn load_conversation(
     let (mut conversation, history) = {
         let conn = db.lock().await;
 
-        let (is_authorized, open_ai_api_key, system_prompt) = {
+        let conversation = {
             // Fetch exactly one chat row; panic if multiple rows are found.
             let mut stmt = conn.prepare(
                 "SELECT is_authorized, open_ai_api_key, system_prompt \
@@ -121,22 +121,21 @@ pub async fn load_conversation(
             if rows.next()?.is_some() {
                 panic!("multiple chat rows found for chat_id {}", chat_id.0);
             }
-            (is_authorized, open_ai_api_key, system_prompt)
-        };
 
-        let system_prompt = if !system_prompt.is_empty() {
-            Some(conversation::Message::with_text(system_prompt, tokenizer))
-        } else {
-            None
-        };
+            let system_prompt = if !system_prompt.is_empty() {
+                Some(conversation::Message::with_text(system_prompt, tokenizer))
+            } else {
+                None
+            };
 
-        let conversation = Conversation {
-            chat_id: chat_id.0 as u64,
-            turns: Default::default(),
-            prompt_tokens: 0,
-            is_authorized,
-            openai_api_key: open_ai_api_key,
-            system_prompt,
+            Conversation {
+                chat_id: chat_id.0 as u64,
+                turns: Default::default(),
+                prompt_tokens: 0,
+                is_authorized,
+                openai_api_key: open_ai_api_key,
+                system_prompt,
+            }
         };
 
         let history = {
@@ -178,7 +177,7 @@ pub async fn load_conversation(
 
     let mut user_message: Option<conversation::Message> = None;
 
-    // We iterated newest-to-oldest; restore to oldest-first.
+    // We collected newest-to-oldest; process oldest-first while respecting the token budget.
     for (role, message) in history.into_iter().rev() {
         conversation.prompt_tokens += message.tokens;
 
