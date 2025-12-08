@@ -10,6 +10,7 @@ use openai_api::send_with_web_search;
 use std::clone;
 use std::fmt::Debug;
 use std::{collections::HashMap, sync::Arc};
+use teloxide::types::CopyTextButton;
 use teloxide::{
     prelude::*,
     types::{ChatId, Message, ReactionType},
@@ -42,82 +43,78 @@ async fn main() -> Result<(), DynError> {
         let app = app.clone();
 
         async move {
-            if let Some(text) = msg.text() {
-                let user_text = text.to_owned();
-                let chat_id = msg.chat.id;
-                let message_id = msg.id;
-                let typing_guard = TypingIndicator::new(bot.clone(), chat_id);
-                let (turn_id, prompt_tokens, history_messages) = {
-                    let mut conv_map = app.conversations.lock().await;
-                    let conversation = conv_map
-                        .entry(chat_id)
-                        .or_insert_with(Conversation::default);
-                    let turn_id =
-                        conversation.record_user_message(&app.tokenizer, user_text.clone());
-                    conversation
-                        .prune_to_token_budget(app.max_prompt_tokens, app.system_prompt_tokens);
-                    let history = conversation.messages();
-                    let prompt_tokens =
-                        conversation.prompt_token_count() + app.system_prompt_tokens;
-
-                    (turn_id, prompt_tokens, history)
-                };
-                log::debug!(
-                    "chat {chat_id} prompt tokens: {prompt_tokens}/{max_prompt_tokens}",
-                    max_prompt_tokens = app.max_prompt_tokens
-                );
-
-                let llm_result = send_with_web_search(
-                    &app.http_client,
-                    &app.model,
-                    app.system_prompt.as_deref(),
-                    &history_messages,
-                )
-                .await;
-                drop(typing_guard);
-
-                match llm_result {
-                    Ok(answer) => {
-                        bot.send_message(chat_id, answer.clone()).await?;
-                        let mut conv_map = app.conversations.lock().await;
-                        let conversation = conv_map
-                            .get_mut(&chat_id)
-                            .expect("conversation should exist");
-                        conversation.record_assistant_response(&app.tokenizer, turn_id, answer);
-                        conversation
-                            .prune_to_token_budget(app.max_prompt_tokens, app.system_prompt_tokens);
-                    }
-                    Err(err) => {
-                        log::error!("failed to get llm response: {err}");
-
-                        if let Err(reaction_err) = bot
-                            .set_message_reaction(chat_id, message_id)
-                            .reaction(vec![ReactionType::Emoji {
-                                emoji: "🔥".to_string(),
-                            }])
-                            .await
-                        {
-                            log::warn!(
-                                "failed to set failure reaction for chat {chat_id}: {reaction_err}"
-                            );
-                        }
-                        let mut conv_map = app.conversations.lock().await;
-                        let conversation = conv_map
-                            .get_mut(&chat_id)
-                            .expect("conversation should exist");
-                        conversation.discard_turn(turn_id);
-                        if conversation.is_empty() {
-                            conv_map.remove(&chat_id);
-                        }
-                    }
-                }
-            } else {
+            if msg.text().is_none() {
                 bot.send_message(
                     msg.chat.id,
                     "Please send text messages so I can ask the language model.",
                 )
                 .await?;
+
+                return Ok(());
             }
+
+            let user_text = msg.text().unwrap().to_owned();
+            let chat_id = msg.chat.id;
+            let message_id = msg.id;
+
+            let typing_guard = TypingIndicator::new(bot.clone(), chat_id);
+
+            let (turn_id, prompt_tokens, history_messages) = {
+                let mut conv_map = app.conversations.lock().await;
+                let conversation = conv_map
+                    .entry(chat_id)
+                    .or_insert_with(Conversation::default);
+                let turn_id = conversation.record_user_message(&app.tokenizer, user_text.clone());
+                conversation.prune_to_token_budget(app.max_prompt_tokens, app.system_prompt_tokens);
+                let history = conversation.messages();
+                let prompt_tokens = conversation.prompt_token_count() + app.system_prompt_tokens;
+
+                (turn_id, prompt_tokens, history)
+            };
+            log::debug!(
+                "chat {chat_id} prompt tokens: {prompt_tokens}/{max_prompt_tokens}",
+                max_prompt_tokens = app.max_prompt_tokens
+            );
+
+            let llm_result = send_with_web_search(
+                &app.http_client,
+                &app.model,
+                app.system_prompt.as_deref(),
+                &history_messages,
+            )
+            .await;
+
+            drop(typing_guard);
+
+            let mut conv_map = app.conversations.lock().await;
+            let conversation = conv_map
+                .get_mut(&chat_id)
+                .expect("conversation should exist");
+
+            match llm_result {
+                Ok(answer) => {
+                    bot.send_message(chat_id, answer.clone()).await?;
+
+                    conversation.record_assistant_response(&app.tokenizer, turn_id, answer);
+                    conversation
+                        .prune_to_token_budget(app.max_prompt_tokens, app.system_prompt_tokens);
+                }
+                Err(err) => {
+                    log::error!("failed to get llm response: {err}");
+
+                    conversation.discard_turn(turn_id);
+                    if conversation.is_empty() {
+                        conv_map.remove(&chat_id);
+                    }
+
+                    bot.set_message_reaction(chat_id, message_id)
+                        .reaction(vec![ReactionType::Emoji {
+                            emoji: "🔥".to_string(),
+                        }])
+                        .await?;
+                }
+            }
+
             respond(())
         }
     })

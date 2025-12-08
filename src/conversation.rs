@@ -2,23 +2,11 @@ use log::warn;
 use std::{collections::VecDeque, sync::Arc};
 use tiktoken_rs::{CoreBPE, get_bpe_from_model, o200k_base};
 
-#[derive(Debug)]
-pub struct HistoryMessage {
-    pub role: MessageRole,
-    pub text: String,
-}
-
 #[derive(Debug, Default)]
 pub struct Conversation {
     next_turn_id: u64,
     turns: VecDeque<ChatTurn>,
     prompt_tokens: usize,
-}
-
-#[derive(Debug)]
-pub enum MessageRole {
-    User,
-    Assistant,
 }
 
 #[derive(Debug)]
@@ -32,6 +20,18 @@ struct ChatTurn {
 struct TokenizedMessage {
     text: String,
     tokens: usize,
+}
+
+#[derive(Debug)]
+pub struct HistoryMessage {
+    pub role: MessageRole,
+    pub text: String,
+}
+
+#[derive(Debug)]
+pub enum MessageRole {
+    User,
+    Assistant,
 }
 
 #[derive(Clone)]
