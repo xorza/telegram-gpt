@@ -10,7 +10,7 @@ pub struct Conversation {
     pub is_authorized: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ChatTurn {
     pub user: Message,
     pub assistant: Message,
