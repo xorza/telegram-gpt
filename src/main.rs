@@ -4,7 +4,7 @@ mod conversation;
 mod openai_api;
 mod typing;
 
-use conversation::{Conversation, TokenCounter};
+use conversation::{Conversation, TokenCounter, TokenizedMessage};
 use flexi_logger::{Cleanup, Criterion, Duplicate, FileSpec, Logger, Naming};
 use openai_api::send_with_web_search;
 use std::clone;
@@ -29,8 +29,7 @@ struct App {
     http_client: Arc<reqwest::Client>,
     model: String,
     tokenizer: Arc<TokenCounter>,
-    system_prompt: Option<String>,
-    system_prompt_tokens: usize,
+    system_prompt: Option<TokenizedMessage>,
     max_prompt_tokens: usize,
     conversations: Arc<Mutex<HashMap<ChatId, Conversation>>>,
 }
@@ -65,9 +64,14 @@ async fn main() -> Result<(), DynError> {
                     .entry(chat_id)
                     .or_insert_with(Conversation::default);
                 let turn_id = conversation.record_user_message(&app.tokenizer, user_text.clone());
-                conversation.prune_to_token_budget(app.max_prompt_tokens, app.system_prompt_tokens);
+                let system_prompt_tokens = app
+                    .system_prompt
+                    .as_ref()
+                    .and_then(|p| Some(p.tokens))
+                    .unwrap_or_default();
+                conversation.prune_to_token_budget(app.max_prompt_tokens, system_prompt_tokens);
                 let history = conversation.messages();
-                let prompt_tokens = conversation.prompt_token_count() + app.system_prompt_tokens;
+                let prompt_tokens = conversation.prompt_token_count() + system_prompt_tokens;
 
                 (turn_id, prompt_tokens, history)
             };
@@ -79,7 +83,7 @@ async fn main() -> Result<(), DynError> {
             let llm_result = send_with_web_search(
                 &app.http_client,
                 &app.model,
-                app.system_prompt.as_deref(),
+                app.system_prompt.as_ref(),
                 &history_messages,
             )
             .await;
@@ -96,8 +100,6 @@ async fn main() -> Result<(), DynError> {
                     bot.send_message(chat_id, answer.clone()).await?;
 
                     conversation.record_assistant_response(&app.tokenizer, turn_id, answer);
-                    conversation
-                        .prune_to_token_budget(app.max_prompt_tokens, app.system_prompt_tokens);
                 }
                 Err(err) => {
                     log::error!("failed to get llm response: {err}");
@@ -137,23 +139,19 @@ fn init() -> anyhow::Result<App, anyhow::Error> {
         .duplicate_to_stdout(Duplicate::Warn)
         .start()?;
 
-    log::info!("starting tggpt bot");
-
     let bot = Bot::from_env();
     let http_client = Arc::new(reqwest::Client::new());
     let model = std::env::var("GENAI_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
     let tokenizer = Arc::new(TokenCounter::new(&model));
-    let system_prompt = std::env::var("GENAI_SYSTEM_PROMPT").ok();
-    let system_prompt_tokens = system_prompt
-        .as_deref()
-        .map(|prompt| tokenizer.count_text(prompt))
-        .unwrap_or(0);
-    let max_prompt_tokens = std::env::var("GENAI_MAX_PROMPT_TOKENS")
+    let system_prompt = std::env::var("GENAI_SYSTEM_PROMPT")
         .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(DEFAULT_MAX_PROMPT_TOKENS);
+        .filter(|s| !s.is_empty())
+        .and_then(|s| Some(TokenizedMessage::new(s, &tokenizer)));
+
     let conversations: Arc<Mutex<HashMap<ChatId, Conversation>>> =
         Arc::new(Mutex::new(HashMap::new()));
+
+    log::info!("starting tggpt bot");
 
     Ok(App {
         bot,
@@ -161,8 +159,7 @@ fn init() -> anyhow::Result<App, anyhow::Error> {
         model,
         tokenizer,
         system_prompt,
-        system_prompt_tokens,
-        max_prompt_tokens,
+        max_prompt_tokens: DEFAULT_MAX_PROMPT_TOKENS,
         conversations,
     })
 }
@@ -175,7 +172,6 @@ impl Debug for App {
             .field("model", &self.model)
             // .field("tokenizer", &self.tokenizer)
             .field("system_prompt", &self.system_prompt)
-            .field("system_prompt_tokens", &self.system_prompt_tokens)
             .field("max_prompt_tokens", &self.max_prompt_tokens)
             .field("conversations", &self.conversations)
             .finish()

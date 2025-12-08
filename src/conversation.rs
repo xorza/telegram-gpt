@@ -16,10 +16,10 @@ struct ChatTurn {
     assistant: Option<TokenizedMessage>,
 }
 
-#[derive(Debug)]
-struct TokenizedMessage {
-    text: String,
-    tokens: usize,
+#[derive(Debug, Clone)]
+pub struct TokenizedMessage {
+    pub text: String,
+    pub tokens: usize,
 }
 
 #[derive(Debug)]
@@ -141,7 +141,7 @@ impl ChatTurn {
 }
 
 impl TokenizedMessage {
-    fn new(text: String, tokenizer: &TokenCounter) -> Self {
+    pub fn new(text: String, tokenizer: &TokenCounter) -> Self {
         let tokens = tokenizer.count_text(&text);
         Self { text, tokens }
     }

@@ -1,5 +1,5 @@
 use crate::DynError;
-use crate::conversation::{HistoryMessage, MessageRole};
+use crate::conversation::{HistoryMessage, MessageRole, TokenizedMessage};
 use reqwest::Client;
 use serde_json::{Value, json};
 
@@ -12,15 +12,13 @@ enum ContentType {
 pub async fn send_with_web_search(
     http: &Client,
     model: &str,
-    system_prompt: Option<&str>,
+    system_prompt: Option<&TokenizedMessage>,
     messages: &[HistoryMessage],
 ) -> Result<String, DynError> {
     let mut input_items = Vec::new();
 
     if let Some(prompt) = system_prompt {
-        if !prompt.trim().is_empty() {
-            input_items.push(text_content("developer", prompt, ContentType::Input));
-        }
+        input_items.push(text_content("developer", &prompt.text, ContentType::Input));
     }
 
     for message in messages {
