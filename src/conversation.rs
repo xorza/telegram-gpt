@@ -38,10 +38,13 @@ impl Conversation {
         self.history.push_back(message);
     }
 
-    pub fn add_messages(&mut self, messages: &[Message]) {
+    pub fn add_messages<I>(&mut self, messages: I)
+    where
+        I: IntoIterator<Item = Message>,
+    {
         for message in messages {
             self.prompt_tokens += message.tokens;
-            self.history.push_back(message.clone());
+            self.history.push_back(message);
         }
     }
 

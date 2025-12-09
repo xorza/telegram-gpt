@@ -121,13 +121,14 @@ async fn process_message(app: App, bot: Bot, msg: Message) -> anyhow::Result<()>
                     &app.tokenizer,
                 );
 
-                conversation.add_messages(&[user_message.clone(), assistant_message.clone()]);
-
                 for chunk in split_message(&assistant_message.text) {
                     bot.send_message(chat_id, chunk).await?;
                 }
 
-                db::add_messages(&app.db, chat_id, &[user_message, assistant_message]).await?;
+                let messages = [user_message, assistant_message];
+
+                db::add_messages(&app.db, chat_id, &messages).await?;
+                conversation.add_messages(messages.into_iter());
             }
             Err(err) => {
                 log::error!("failed to get llm response: {err}");
