@@ -26,7 +26,7 @@ use typing::TypingIndicator;
 
 const DEFAULT_OPEN_AI_MODEL: &str = "gpt-4.1";
 const TELEGRAM_MAX_MESSAGE_LENGTH: usize = 4096;
-const STREAM_RESPONSE: bool = false;
+const STREAM_RESPONSE: bool = true;
 
 #[derive(Clone)]
 struct App {
@@ -232,11 +232,11 @@ async fn handle_stream_delta(
     bot: Bot,
     chat_id: ChatId,
     stream_buffer: Arc<tokio::sync::Mutex<String>>,
-    delta: String,
+    delta: &str,
     finalize: bool,
 ) -> anyhow::Result<()> {
     let mut buf = stream_buffer.lock().await;
-    buf.push_str(&delta);
+    buf.push_str(delta);
 
     fn take_prefix(buf: &mut String, max_chars: usize) -> String {
         let mut char_idx = 0usize;

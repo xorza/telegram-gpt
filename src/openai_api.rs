@@ -57,7 +57,7 @@ pub async fn send<F, Fut>(
     on_delta: F,
 ) -> anyhow::Result<String>
 where
-    F: FnMut(String, bool) -> Fut,
+    F: FnMut(&str, bool) -> Fut,
     Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
 {
     if stream {
@@ -74,7 +74,7 @@ async fn send_no_streaming<F, Fut>(
     mut on_delta: F,
 ) -> anyhow::Result<String>
 where
-    F: FnMut(String, bool) -> Fut,
+    F: FnMut(&str, bool) -> Fut,
     Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
 {
     let response = http
@@ -98,9 +98,8 @@ where
     if let Some(text) = extract_output_text(&response_body) {
         let trimmed = text.trim();
         if !trimmed.is_empty() {
-            let owned = trimmed.to_string();
-            on_delta(owned.clone(), true).await?;
-            return Ok(owned);
+            on_delta(trimmed, true).await?;
+            return Ok(trimmed.to_string());
         }
     }
 
@@ -116,7 +115,7 @@ async fn send_streaming<F, Fut>(
     mut on_delta: F,
 ) -> anyhow::Result<String>
 where
-    F: FnMut(String, bool) -> Fut,
+    F: FnMut(&str, bool) -> Fut,
     Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
 {
     let response = http
@@ -144,10 +143,11 @@ where
                 return Err(err.into());
             }
 
-            on_delta(String::new(), true).await?;
+            on_delta("", true).await?;
             return Ok(full_answer);
         } else {
-            buffer.extend(chunk.unwrap());
+            let chunk = chunk.unwrap();
+            buffer.extend(chunk);
         }
 
         while let Some(event) = pop_next_event(&mut buffer) {
@@ -155,32 +155,31 @@ where
 
             for line in event_text.lines() {
                 let line = line.trim();
+                if line.starts_with("event: response.output_text.done") {
+                    on_delta("", true).await?;
+                    return Ok(full_answer);
+                }
                 if !line.starts_with("data:") {
                     continue;
                 }
 
                 let data = line.trim_start_matches("data:").trim();
 
-                // Streaming sentinel from OpenAI
-                if data == "[DONE]" {
-                    on_delta(String::new(), true).await?;
-                    return Ok(full_answer);
-                }
-
                 let value: serde_json::Value = serde_json::from_str(data)?;
+                let delta = value
+                    .get("delta")
+                    .expect("delta field not found")
+                    .as_str()
+                    .expect("delta value not a string");
 
-                if let Some(delta) = extract_stream_delta(&value) {
-                    if !delta.is_empty() {
-                        full_answer.push_str(&delta);
-                        on_delta(delta, false).await?;
-                    }
-                }
+                full_answer.push_str(delta);
+                on_delta(delta, false).await?;
             }
         }
     }
 
     // If stream ended without explicit DONE, still signal completion once.
-    on_delta(String::new(), true).await?;
+    on_delta("", true).await?;
 
     Ok(full_answer)
 }
@@ -259,36 +258,6 @@ fn pop_next_event(buffer: &mut Vec<u8>) -> Option<Vec<u8>> {
     let event: Vec<u8> = buffer.drain(..idx).collect();
     buffer.drain(..sep_len);
     Some(event)
-}
-
-fn extract_stream_delta(value: &serde_json::Value) -> Option<String> {
-    if let Some(delta) = value.get("delta").and_then(|d| d.as_str()) {
-        if !delta.is_empty() {
-            return Some(delta.to_string());
-        }
-    }
-
-    if let Some(output) = value.get("output").and_then(|v| v.as_array()) {
-        let mut chunks = Vec::new();
-        for item in output {
-            if let Some(content) = item.get("content").and_then(|v| v.as_array()) {
-                for part in content {
-                    if part.get("type").and_then(|t| t.as_str()) == Some("text_delta") {
-                        if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
-                            chunks.push(text);
-                        }
-                    } else if let Some(delta) = part.get("delta").and_then(|d| d.as_str()) {
-                        chunks.push(delta);
-                    }
-                }
-            }
-        }
-        if !chunks.is_empty() {
-            return Some(chunks.join(""));
-        }
-    }
-
-    None
 }
 
 pub fn context_length(model: &str) -> usize {
