@@ -66,6 +66,8 @@ async fn main() {
 async fn init() -> App {
     dotenv::dotenv().ok();
 
+    verify_python3().await;
+
     // Log to rotating files capped at 10MB each, keeping the 3 newest, while also duplicating info logs to stdout.
     Logger::try_with_env_or_str("info")
         .expect("Failed to initialize logger")
@@ -73,7 +75,7 @@ async fn init() -> App {
         .rotate(
             Criterion::Size(10 * 1024 * 1024),
             Naming::Numbers,
-            Cleanup::KeepLogFiles(3),
+            Cleanup::KeepLogFiles(10),
         )
         .duplicate_to_stdout(Duplicate::All)
         .start()
@@ -103,6 +105,31 @@ async fn init() -> App {
         conversations,
         db,
     }
+}
+
+async fn verify_python3() {
+    // Ensure python3 and telegramify_markdown are available for markdown postprocessing.
+    let probe = Command::new("python3")
+        .args(["-c", "import telegramify_markdown; print('ok')"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .expect("failed to invoke python3 for dependency check");
+
+    let probe_ok = probe.status.success() && String::from_utf8_lossy(&probe.stdout).trim() == "ok";
+
+    if !probe_ok {
+        let error = format!(
+            "python3 with telegramify_markdown is required to run telegramify.py.\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&probe.stdout),
+            String::from_utf8_lossy(&probe.stderr)
+        );
+        log::error!("{}", error);
+        panic!("{}", error);
+    }
+
+    log::info!("python3 with telegramify_markdown is available");
 }
 
 impl App {
