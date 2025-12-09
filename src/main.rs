@@ -256,6 +256,7 @@ impl App {
             .shutdown()
             .await
             .expect("failed to close telegramify stdin");
+        // drop is required here otherwise python script will never receive its input
         drop(stdin);
 
         let mut stdout_buf = Vec::new();
