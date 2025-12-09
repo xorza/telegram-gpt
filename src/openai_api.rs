@@ -53,7 +53,24 @@ pub async fn send<F, Fut>(
     http: &Client,
     api_key: &str,
     payload: serde_json::Value,
-    _stream: bool,
+    stream: bool,
+    on_delta: F,
+) -> anyhow::Result<String>
+where
+    F: FnMut(String, bool) -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
+{
+    if stream {
+        send_streaming(http, api_key, payload, on_delta).await
+    } else {
+        send_no_streaming(http, api_key, payload, on_delta).await
+    }
+}
+
+async fn send_no_streaming<F, Fut>(
+    http: &Client,
+    api_key: &str,
+    payload: serde_json::Value,
     mut on_delta: F,
 ) -> anyhow::Result<String>
 where
@@ -92,15 +109,14 @@ where
     ))
 }
 
-#[allow(dead_code)]
-pub async fn send_stream<F, Fut>(
+async fn send_streaming<F, Fut>(
     http: &Client,
     api_key: &str,
     payload: serde_json::Value,
     mut on_delta: F,
-) -> anyhow::Result<()>
+) -> anyhow::Result<String>
 where
-    F: FnMut(String) -> Fut,
+    F: FnMut(String, bool) -> Fut,
     Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
 {
     let response = http
@@ -138,20 +154,24 @@ where
 
                 // Streaming sentinel from OpenAI
                 if data == "[DONE]" {
-                    return Ok(());
+                    
+                    //fixme: should return complete response
+                    return Ok(String::new());
                 }
 
                 let value: serde_json::Value = serde_json::from_str(data)?;
 
                 if let Some(delta) = extract_stream_delta(&value) {
                     if !delta.is_empty() {
-                        on_delta(delta).await?;
+                        //fixme: should have second argument if this is final delta
+                        on_delta(delta, ?).await?;
                     }
                 }
             }
         }
     }
 
+    //fixme: should return complete response
     Ok(())
 }
 
