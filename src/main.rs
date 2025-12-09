@@ -12,8 +12,8 @@ use flexi_logger::{Cleanup, Criterion, Duplicate, FileSpec, Logger, Naming};
 use reqwest::header::PROXY_AUTHENTICATE;
 use rusqlite::Connection;
 use serde_json::Value;
-use std::clone;
 use std::fmt::Debug;
+use std::{clone, process};
 use std::{collections::HashMap, path::Path, sync::Arc};
 use teloxide::RequestError;
 use teloxide::types::CopyTextButton;
@@ -153,16 +153,8 @@ impl App {
 
         match llm_result {
             Ok(assistant_text) => {
-                let assistant_message = conversation::Message::with_text(
-                    MessageRole::Assistant,
-                    assistant_text,
-                    &self.tokenizer,
-                );
-                let messages = [user_message, assistant_message];
-                self.get_conversation(chat_id)
-                    .await
-                    .add_messages(messages.iter().cloned());
-                db::add_messages(&self.db, chat_id, messages.into_iter()).await;
+                self.process_llm_response(chat_id, assistant_text, user_message)
+                    .await?;
             }
             Err(err) => {
                 log::error!("failed to get llm response: {err}");
@@ -176,6 +168,39 @@ impl App {
             }
         }
 
+        Ok(())
+    }
+
+    async fn process_llm_response(
+        &self,
+        chat_id: ChatId,
+        assistant_text: String,
+        user_message: conversation::Message,
+    ) -> anyhow::Result<()> {
+        let assistant_message = conversation::Message::with_text(
+            MessageRole::Assistant,
+            assistant_text.clone(),
+            &self.tokenizer,
+        );
+        let messages = [user_message, assistant_message];
+        self.get_conversation(chat_id)
+            .await
+            .add_messages(messages.iter().cloned());
+        db::add_messages(&self.db, chat_id, messages.into_iter()).await;
+
+        self.postprocess_and_send(chat_id, assistant_text).await?;
+
+        Ok(())
+    }
+
+    async fn postprocess_and_send(
+        &self,
+        chat_id: ChatId,
+        assistant_text: String,
+    ) -> anyhow::Result<()> {
+
+        
+        
         Ok(())
     }
 
