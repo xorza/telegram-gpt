@@ -57,7 +57,7 @@ pub async fn send<F, Fut>(
     on_delta: F,
 ) -> anyhow::Result<String>
 where
-    F: FnMut(&str, bool) -> Fut,
+    F: FnMut(String, bool) -> Fut,
     Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
 {
     if stream {
@@ -74,7 +74,7 @@ async fn send_no_streaming<F, Fut>(
     mut on_delta: F,
 ) -> anyhow::Result<String>
 where
-    F: FnMut(&str, bool) -> Fut,
+    F: FnMut(String, bool) -> Fut,
     Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
 {
     let response = http
@@ -98,8 +98,9 @@ where
     if let Some(text) = extract_output_text(&response_body) {
         let trimmed = text.trim();
         if !trimmed.is_empty() {
-            on_delta(trimmed, true).await?;
-            return Ok(trimmed.to_string());
+            let owned = trimmed.to_string();
+            on_delta(owned.clone(), true).await?;
+            return Ok(owned);
         }
     }
 
@@ -115,7 +116,7 @@ async fn send_streaming<F, Fut>(
     mut on_delta: F,
 ) -> anyhow::Result<String>
 where
-    F: FnMut(&str, bool) -> Fut,
+    F: FnMut(String, bool) -> Fut,
     Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
 {
     let response = http
@@ -143,7 +144,7 @@ where
                 return Err(err.into());
             }
 
-            on_delta("", true).await?;
+            on_delta(String::new(), true).await?;
             return Ok(full_answer);
         } else {
             let chunk = chunk.unwrap();
@@ -156,7 +157,7 @@ where
             for line in event_text.lines() {
                 let line = line.trim();
                 if line.starts_with("event: response.output_text.done") {
-                    on_delta("", true).await?;
+                    on_delta(String::new(), true).await?;
                     return Ok(full_answer);
                 }
                 if !line.starts_with("data:") {
@@ -173,13 +174,13 @@ where
                     .expect("delta value not a string");
 
                 full_answer.push_str(delta);
-                on_delta(delta, false).await?;
+                on_delta(delta.to_string(), false).await?;
             }
         }
     }
 
     // If stream ended without explicit DONE, still signal completion once.
-    on_delta("", true).await?;
+    on_delta(String::new(), true).await?;
 
     Ok(full_answer)
 }

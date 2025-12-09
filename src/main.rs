@@ -152,7 +152,7 @@ impl App {
             let bot = self.bot.clone();
             let stream_buffer = Arc::new(tokio::sync::Mutex::new(String::new()));
 
-            move |delta, finalize| {
+            move |delta: String, finalize| {
                 handle_stream_delta(bot.clone(), chat_id, stream_buffer.clone(), delta, finalize)
             }
         };
@@ -232,11 +232,11 @@ async fn handle_stream_delta(
     bot: Bot,
     chat_id: ChatId,
     stream_buffer: Arc<tokio::sync::Mutex<String>>,
-    delta: &str,
+    delta: String,
     finalize: bool,
 ) -> anyhow::Result<()> {
     let mut buf = stream_buffer.lock().await;
-    buf.push_str(delta);
+    buf.push_str(&delta);
 
     fn take_prefix(buf: &mut String, max_chars: usize) -> String {
         let mut char_idx = 0usize;
