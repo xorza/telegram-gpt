@@ -96,9 +96,12 @@ async fn process_message(app: App, bot: Bot, msg: Message) -> anyhow::Result<()>
 
         let payload = openai_api::prepare_payload(
             &app.model,
-            conversation.system_prompt.as_ref(),
-            &conversation,
-            &user_message,
+            conversation
+                .system_prompt
+                .as_ref()
+                .into_iter()
+                .chain(conversation.history.iter())
+                .chain(std::iter::once(&user_message)),
         );
 
         (user_message, payload, conversation.openai_api_key.clone())

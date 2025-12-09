@@ -13,7 +13,10 @@ enum ContentType {
     Output,
 }
 
-pub fn prepare_payload(model: &str, messages: &[Message]) -> serde_json::Value {
+pub fn prepare_payload<'a, I>(model: &str, messages: I) -> serde_json::Value
+where
+    I: IntoIterator<Item = &'a Message>,
+{
     let mut input_items = Vec::new();
 
     for msg in messages {

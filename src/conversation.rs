@@ -33,6 +33,11 @@ pub struct TokenCounter {
 }
 
 impl Conversation {
+    pub fn add_message(&mut self, message: Message) {
+        // Token count is managed by callers during reconstruction/loading.
+        self.history.push_back(message);
+    }
+
     pub fn add_messages(&mut self, messages: &[Message]) {
         for message in messages {
             self.prompt_tokens += message.tokens;
