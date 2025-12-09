@@ -183,7 +183,12 @@ impl App {
         assistant_text: String,
         user_message: conversation::Message,
     ) -> anyhow::Result<()> {
-        let blocks = self.postprocess(assistant_text).await;
+        let blocks = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            self.postprocess(assistant_text.clone()),
+        )
+        .await
+        .expect("postprocess timed out");
 
         let assistant_message = conversation::Message::with_text(
             MessageRole::Assistant,
