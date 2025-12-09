@@ -66,8 +66,6 @@ async fn main() {
 async fn init() -> App {
     dotenv::dotenv().ok();
 
-    verify_python3().await;
-
     // Log to rotating files capped at 10MB each, keeping the 3 newest, while also duplicating info logs to stdout.
     Logger::try_with_env_or_str("info")
         .expect("Failed to initialize logger")
@@ -80,6 +78,8 @@ async fn init() -> App {
         .duplicate_to_stdout(Duplicate::All)
         .start()
         .expect("Failed to start logger");
+
+    verify_python3().await;
 
     let bot = Bot::from_env();
     let http_client = Arc::new(reqwest::Client::new());
