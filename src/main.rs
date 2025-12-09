@@ -24,8 +24,6 @@ use teloxide::{
 use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard};
 use typing::TypingIndicator;
 
-type DynError = Box<dyn std::error::Error + Send + Sync>;
-
 const DEFAULT_OPEN_AI_MODEL: &str = "gpt-4.1";
 const TELEGRAM_MAX_MESSAGE_LENGTH: usize = 4096;
 const STREAM_RESPONSE: bool = false;

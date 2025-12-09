@@ -1,6 +1,5 @@
 use std::panic::AssertUnwindSafe;
 
-use crate::DynError;
 use crate::conversation::{Conversation, Message, MessageRole};
 use anyhow::{Context, anyhow};
 use futures_util::StreamExt;
@@ -56,7 +55,7 @@ pub async fn send<F, Fut>(
     payload: serde_json::Value,
     _stream: bool,
     mut on_delta: F,
-) -> anyhow::Result<String, DynError>
+) -> anyhow::Result<String>
 where
     F: FnMut(String, bool) -> Fut,
     Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
@@ -72,7 +71,9 @@ where
     let body_text = response.text().await?;
 
     if !status.is_success() {
-        return Err(format!("OpenAI Responses API error {status}: {body_text}").into());
+        return Err(anyhow::anyhow!(
+            "OpenAI Responses API error {status}: {body_text}"
+        ));
     }
 
     let response_body: serde_json::Value = serde_json::from_str(&body_text)?;
@@ -86,7 +87,9 @@ where
         }
     }
 
-    Err(format!("OpenAI response missing text output: {response_body}").into())
+    Err(anyhow::anyhow!(
+        "OpenAI response missing text output: {response_body}"
+    ))
 }
 
 #[allow(dead_code)]
@@ -95,7 +98,7 @@ pub async fn send_stream<F, Fut>(
     api_key: &str,
     payload: serde_json::Value,
     mut on_delta: F,
-) -> anyhow::Result<(), DynError>
+) -> anyhow::Result<()>
 where
     F: FnMut(String) -> Fut,
     Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
@@ -110,7 +113,9 @@ where
     let status = response.status();
     if !status.is_success() {
         let body_text = response.text().await?;
-        return Err(format!("OpenAI Responses API error {status}: {body_text}").into());
+        return Err(anyhow::anyhow!(
+            "OpenAI Responses API error {status}: {body_text}"
+        ));
     }
 
     let mut stream = response.bytes_stream();
