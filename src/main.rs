@@ -151,26 +151,21 @@ impl App {
         drop(conversation);
 
         let stream_buffer = Arc::new(tokio::sync::Mutex::new(String::new()));
+        let on_stream_delta = {
+            let bot = self.bot.clone();
+            let stream_buffer = stream_buffer.clone();
+
+            move |delta, finalize| {
+                handle_stream_delta(bot.clone(), chat_id, stream_buffer.clone(), delta, finalize)
+            }
+        };
 
         let llm_result = openai_api::send(
             &self.http_client,
             &openai_api_key,
             payload,
             STREAM_RESPONSE,
-            {
-                let bot = self.bot.clone();
-                let stream_buffer = stream_buffer.clone();
-
-                move |delta, finalize| {
-                    handle_stream_delta(
-                        bot.clone(),
-                        chat_id,
-                        stream_buffer.clone(),
-                        delta,
-                        finalize,
-                    )
-                }
-            },
+            on_stream_delta,
         )
         .await;
 
