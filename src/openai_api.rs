@@ -50,11 +50,17 @@ where
 }
 
 #[allow(dead_code)]
-pub async fn send(
+pub async fn send<F, Fut>(
     http: &Client,
     api_key: &str,
     payload: serde_json::Value,
-) -> anyhow::Result<String, DynError> {
+    _stream: bool,
+    mut on_delta: F,
+) -> anyhow::Result<String, DynError>
+where
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
+{
     let response = http
         .post("https://api.openai.com/v1/responses")
         .bearer_auth(api_key)
@@ -74,7 +80,9 @@ pub async fn send(
     if let Some(text) = extract_output_text(&response_body) {
         let trimmed = text.trim();
         if !trimmed.is_empty() {
-            return Ok(trimmed.to_string());
+            let owned = trimmed.to_string();
+            on_delta(owned.clone()).await?;
+            return Ok(owned);
         }
     }
 

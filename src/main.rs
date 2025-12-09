@@ -101,32 +101,6 @@ async fn init() -> anyhow::Result<App, anyhow::Error> {
     })
 }
 
-fn split_message(text: &str) -> Vec<String> {
-    if text.is_empty() {
-        return vec![String::new()];
-    }
-
-    let mut chunks = Vec::new();
-    let mut buffer = String::new();
-    let mut buffer_len = 0;
-
-    for ch in text.chars() {
-        if buffer_len == TELEGRAM_MAX_MESSAGE_LENGTH {
-            chunks.push(std::mem::take(&mut buffer));
-            buffer_len = 0;
-        }
-
-        buffer.push(ch);
-        buffer_len += 1;
-    }
-
-    if !buffer.is_empty() {
-        chunks.push(buffer);
-    }
-
-    chunks
-}
-
 impl App {
     async fn process_message(&self, msg: Message) -> anyhow::Result<()> {
         if msg.text().is_none() {
@@ -175,16 +149,31 @@ impl App {
 
         drop(conversation);
 
-        let llm_result = openai_api::send(&self.http_client, &openai_api_key, payload).await;
+        let stream_buffer = Arc::new(tokio::sync::Mutex::new(String::new()));
+
+        let llm_result = openai_api::send(
+            &self.http_client,
+            &openai_api_key,
+            payload,
+            STREAM_RESPONSE,
+            {
+                let bot = self.bot.clone();
+                let stream_buffer = stream_buffer.clone();
+
+                move |delta| handle_stream_delta(bot.clone(), chat_id, stream_buffer.clone(), delta)
+            },
+        )
+        .await;
+
+        assert!(
+            stream_buffer.lock().await.is_empty(),
+            "Buffer should be empty after streaming"
+        );
 
         drop(typing_indicator);
 
         match llm_result {
             Ok(assistant_text) => {
-                for chunk in split_message(&assistant_text) {
-                    self.bot.send_message(chat_id, chunk).await?;
-                }
-
                 let assistant_message = conversation::Message::with_text(
                     MessageRole::Assistant,
                     assistant_text,
@@ -241,4 +230,41 @@ impl Debug for App {
             .field("conversations", &self.conversations)
             .finish()
     }
+}
+
+async fn handle_stream_delta(
+    bot: Bot,
+    chat_id: ChatId,
+    stream_buffer: Arc<tokio::sync::Mutex<String>>,
+    delta: String,
+) -> anyhow::Result<()> {
+    let mut buf = stream_buffer.lock().await;
+    buf.push_str(&delta);
+
+    fn take_prefix(buf: &mut String, max_chars: usize) -> String {
+        let mut char_idx = 0usize;
+        let mut byte_split = buf.len();
+        for (i, _) in buf.char_indices() {
+            if char_idx == max_chars {
+                byte_split = i;
+                break;
+            }
+            char_idx += 1;
+        }
+        if byte_split == buf.len() {
+            return std::mem::take(buf);
+        }
+        let tail = buf.split_off(byte_split);
+        std::mem::replace(buf, tail)
+    }
+
+    while buf.chars().count() >= TELEGRAM_MAX_MESSAGE_LENGTH {
+        let chunk = take_prefix(&mut buf, TELEGRAM_MAX_MESSAGE_LENGTH);
+        let to_send = chunk.clone();
+        drop(buf);
+        bot.send_message(chat_id, to_send).await?;
+        buf = stream_buffer.lock().await;
+    }
+
+    Ok(())
 }
