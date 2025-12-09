@@ -136,10 +136,19 @@ where
 
     let mut stream = response.bytes_stream();
     let mut buffer: Vec<u8> = Vec::new();
+    let mut full_answer = String::new();
 
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk?;
-        buffer.extend_from_slice(&chunk);
+        if let Err(err) = chunk {
+            if full_answer.is_empty() {
+                return Err(err.into());
+            }
+
+            on_delta(String::new(), true).await?;
+            return Ok(full_answer);
+        } else {
+            buffer.extend(chunk.unwrap());
+        }
 
         while let Some(event) = pop_next_event(&mut buffer) {
             let event_text = String::from_utf8_lossy(&event);
@@ -154,25 +163,26 @@ where
 
                 // Streaming sentinel from OpenAI
                 if data == "[DONE]" {
-                    
-                    //fixme: should return complete response
-                    return Ok(String::new());
+                    on_delta(String::new(), true).await?;
+                    return Ok(full_answer);
                 }
 
                 let value: serde_json::Value = serde_json::from_str(data)?;
 
                 if let Some(delta) = extract_stream_delta(&value) {
                     if !delta.is_empty() {
-                        //fixme: should have second argument if this is final delta
-                        on_delta(delta, ?).await?;
+                        full_answer.push_str(&delta);
+                        on_delta(delta, false).await?;
                     }
                 }
             }
         }
     }
 
-    //fixme: should return complete response
-    Ok(())
+    // If stream ended without explicit DONE, still signal completion once.
+    on_delta(String::new(), true).await?;
+
+    Ok(full_answer)
 }
 
 fn text_content(role: MessageRole, text: &str, content_type: ContentType) -> serde_json::Value {
