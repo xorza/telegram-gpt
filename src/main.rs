@@ -18,7 +18,7 @@ use teloxide::RequestError;
 use teloxide::types::CopyTextButton;
 use teloxide::{
     prelude::*,
-    types::{ChatId, ReactionType},
+    types::{ChatId, MessageId, ReactionType},
 };
 use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard};
 use typing::TypingIndicator;
@@ -43,10 +43,11 @@ struct App {
 async fn main() -> anyhow::Result<()> {
     let app = init().await?;
 
-    teloxide::repl(app.bot.clone(), move |bot: Bot, msg: Message| {
+    teloxide::repl(app.bot.clone(), move |_bot: Bot, msg: Message| {
         let app = app.clone();
         async move {
-            let result = process_message(app.clone(), bot, msg).await;
+            let result = app.process_message(msg).await;
+            
             if let Err(err) = result {
                 log::error!("Error processing message: {}", err);
             }
@@ -59,175 +60,15 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn process_message(app: App, bot: Bot, msg: Message) -> anyhow::Result<()> {
-    if msg.text().is_none() {
-        bot.send_message(
-            msg.chat.id,
-            "Please send text messages so I can ask the language model.",
-        )
-        .await?;
-
-        return Ok(());
-    }
-
-    let user_text = msg.text().unwrap().to_owned();
-    let chat_id = msg.chat.id;
-    let message_id = msg.id;
-
-    log::info!("received message {message_id} from chat {chat_id}");
-
-    let typing_indicator = TypingIndicator::new(bot.clone(), chat_id);
-
-    let (user_message, payload, openai_api_key) = {
-        let mut conversation = app.get_conversation(chat_id).await?;
-        if !conversation.is_authorized {
-            let error = format!("Unauthorized user {}", chat_id);
-            log::warn!("{}", error);
-            return Err(anyhow::anyhow!(error));
-        }
-
-        let user_message =
-            conversation::Message::with_text(MessageRole::User, user_text, &app.tokenizer);
-
-        let system_prompt_tokens = conversation.system_prompt.as_ref().map_or(0, |p| p.tokens);
-        conversation.prune_to_token_budget(
-            app.max_prompt_tokens - system_prompt_tokens - user_message.tokens,
-        );
-
-        let payload = openai_api::prepare_payload(
-            &app.model,
-            conversation
-                .system_prompt
-                .as_ref()
-                .into_iter()
-                .chain(conversation.history.iter())
-                .chain(std::iter::once(&user_message)),
-        );
-
-        (user_message, payload, conversation.openai_api_key.clone())
-    };
-
-    let streaming = true; // toggle streaming behavior
-    let llm_result = fetch_and_deliver(
-        streaming,
-        bot.clone(),
-        chat_id,
-        &app.http_client,
-        &openai_api_key,
-        payload,
-    )
-    .await;
-
-    drop(typing_indicator);
-
-    {
-        let mut conversation = app.get_conversation(chat_id).await?;
-
-        match llm_result {
-            Ok(answer) => {
-                let assistant_message = conversation::Message::with_text(
-                    MessageRole::Assistant,
-                    answer,
-                    &app.tokenizer,
-                );
-
-                let messages = [user_message, assistant_message];
-
-                conversation.add_messages(messages.iter().cloned());
-                db::add_messages(&app.db, chat_id, messages.into_iter()).await?;
-            }
-            Err(err) => {
-                log::error!("failed to get llm response: {err}");
-
-                bot.set_message_reaction(chat_id, message_id)
-                    .reaction(vec![ReactionType::Emoji {
-                        emoji: "🖕".to_string(),
-                    }])
-                    .await?;
-            }
-        }
-    }
-
-    Ok(())
-}
-
 struct StreamState {
     full_answer: String,
     buffer: String,
 }
 
-async fn fetch_and_deliver(
-    streaming: bool,
-    bot: Bot,
-    chat_id: ChatId,
-    http: &reqwest::Client,
-    api_key: &str,
+struct PreparedRequest {
+    user_message: conversation::Message,
     payload: serde_json::Value,
-) -> anyhow::Result<String, DynError> {
-    if !streaming {
-        let answer = openai_api::send(http, api_key, payload).await?;
-        for chunk in split_message(&answer) {
-            bot.send_message(chat_id, chunk).await?;
-        }
-        return Ok(answer);
-    }
-
-    fn take_prefix(buf: &mut String, max_chars: usize) -> String {
-        let mut char_idx = 0usize;
-        let mut byte_split = buf.len();
-        for (i, _) in buf.char_indices() {
-            if char_idx == max_chars {
-                byte_split = i;
-                break;
-            }
-            char_idx += 1;
-        }
-        let tail = buf.split_off(byte_split);
-        std::mem::replace(buf, tail)
-    }
-
-    let state = Arc::new(tokio::sync::Mutex::new(StreamState {
-        full_answer: String::new(),
-        buffer: String::new(),
-    }));
-
-    openai_api::send_stream(http, api_key, payload, {
-        let bot = bot.clone();
-        let state = state.clone();
-        move |delta| {
-            let bot = bot.clone();
-            let state = state.clone();
-            async move {
-                let mut st = state.lock().await;
-                st.full_answer.push_str(&delta);
-                st.buffer.push_str(&delta);
-
-                while st.buffer.chars().count() >= TELEGRAM_MAX_MESSAGE_LENGTH {
-                    let chunk = take_prefix(&mut st.buffer, TELEGRAM_MAX_MESSAGE_LENGTH);
-                    let to_send = chunk.clone();
-                    drop(st);
-                    bot.send_message(chat_id, to_send).await?;
-                    st = state.lock().await;
-                }
-
-                Ok(())
-            }
-        }
-    })
-    .await?;
-
-    // Flush any remaining buffered text after streaming completes.
-    {
-        let mut st = state.lock().await;
-        if !st.buffer.is_empty() {
-            let to_send = std::mem::take(&mut st.buffer);
-            drop(st);
-            bot.send_message(chat_id, to_send).await?;
-        }
-    }
-
-    let answer = state.lock().await.full_answer.clone();
-    Ok(answer)
+    openai_api_key: String,
 }
 
 async fn init() -> anyhow::Result<App, anyhow::Error> {
@@ -310,6 +151,190 @@ impl Debug for App {
 }
 
 impl App {
+    async fn process_message(&self, msg: Message) -> anyhow::Result<()> {
+        if msg.text().is_none() {
+            self.bot
+                .send_message(
+                    msg.chat.id,
+                    "Please send text messages so I can ask the language model.",
+                )
+                .await?;
+
+            return Ok(());
+        }
+
+        let chat_id = msg.chat.id;
+        let typing_indicator = TypingIndicator::new(self.bot.clone(), chat_id);
+
+        log::info!("received message from chat {chat_id}");
+
+        let user_text = msg.text().unwrap().to_owned();
+        let PreparedRequest {
+            user_message,
+            payload,
+            openai_api_key,
+        } = self.prepare_request(chat_id, user_text).await?;
+
+        let streaming = true; // toggle streaming behavior
+        let llm_result = self
+            .fetch_and_deliver(streaming, chat_id, &openai_api_key, payload)
+            .await;
+
+        drop(typing_indicator);
+
+        self.persist_or_react(chat_id, msg.id, user_message, llm_result)
+            .await?;
+
+        Ok(())
+    }
+
+    async fn prepare_request(
+        &self,
+        chat_id: ChatId,
+        user_text: String,
+    ) -> anyhow::Result<PreparedRequest> {
+        let mut conversation = self.get_conversation(chat_id).await?;
+        if !conversation.is_authorized {
+            let error = format!("Unauthorized user {}", chat_id);
+            log::warn!("{}", error);
+            return Err(anyhow::anyhow!(error));
+        }
+
+        let user_message =
+            conversation::Message::with_text(MessageRole::User, user_text, &self.tokenizer);
+
+        let system_prompt_tokens = conversation.system_prompt.as_ref().map_or(0, |p| p.tokens);
+        conversation.prune_to_token_budget(
+            self.max_prompt_tokens - system_prompt_tokens - user_message.tokens,
+        );
+
+        let payload = openai_api::prepare_payload(
+            &self.model,
+            conversation
+                .system_prompt
+                .as_ref()
+                .into_iter()
+                .chain(conversation.history.iter())
+                .chain(std::iter::once(&user_message)),
+        );
+
+        Ok(PreparedRequest {
+            user_message,
+            payload,
+            openai_api_key: conversation.openai_api_key.clone(),
+        })
+    }
+
+    async fn fetch_and_deliver(
+        &self,
+        streaming: bool,
+        chat_id: ChatId,
+        api_key: &str,
+        payload: serde_json::Value,
+    ) -> anyhow::Result<String, DynError> {
+        if !streaming {
+            let answer = openai_api::send(&self.http_client, api_key, payload).await?;
+            for chunk in split_message(&answer) {
+                self.bot.send_message(chat_id, chunk).await?;
+            }
+            return Ok(answer);
+        }
+
+        fn take_prefix(buf: &mut String, max_chars: usize) -> String {
+            let mut char_idx = 0usize;
+            let mut byte_split = buf.len();
+            for (i, _) in buf.char_indices() {
+                if char_idx == max_chars {
+                    byte_split = i;
+                    break;
+                }
+                char_idx += 1;
+            }
+            let tail = buf.split_off(byte_split);
+            std::mem::replace(buf, tail)
+        }
+
+        let state = Arc::new(tokio::sync::Mutex::new(StreamState {
+            full_answer: String::new(),
+            buffer: String::new(),
+        }));
+
+        openai_api::send_stream(&self.http_client, api_key, payload, {
+            let bot = self.bot.clone();
+            let state = state.clone();
+            move |delta| {
+                let bot = bot.clone();
+                let state = state.clone();
+                async move {
+                    let mut st = state.lock().await;
+                    st.full_answer.push_str(&delta);
+                    st.buffer.push_str(&delta);
+
+                    while st.buffer.chars().count() >= TELEGRAM_MAX_MESSAGE_LENGTH {
+                        let chunk = take_prefix(&mut st.buffer, TELEGRAM_MAX_MESSAGE_LENGTH);
+                        let to_send = chunk.clone();
+                        drop(st);
+                        bot.send_message(chat_id, to_send).await?;
+                        st = state.lock().await;
+                    }
+
+                    Ok(())
+                }
+            }
+        })
+        .await?;
+
+        // Flush any remaining buffered text after streaming completes.
+        {
+            let mut st = state.lock().await;
+            if !st.buffer.is_empty() {
+                let to_send = std::mem::take(&mut st.buffer);
+                drop(st);
+                self.bot.send_message(chat_id, to_send).await?;
+            }
+        }
+
+        let answer = state.lock().await.full_answer.clone();
+        Ok(answer)
+    }
+
+    async fn persist_or_react(
+        &self,
+        chat_id: ChatId,
+        message_id: MessageId,
+        user_message: conversation::Message,
+        llm_result: anyhow::Result<String, DynError>,
+    ) -> anyhow::Result<()> {
+        let mut conversation = self.get_conversation(chat_id).await?;
+
+        match llm_result {
+            Ok(answer) => {
+                let assistant_message = conversation::Message::with_text(
+                    MessageRole::Assistant,
+                    answer,
+                    &self.tokenizer,
+                );
+
+                let messages = [user_message, assistant_message];
+
+                conversation.add_messages(messages.iter().cloned());
+                db::add_messages(&self.db, chat_id, messages.into_iter()).await?;
+            }
+            Err(err) => {
+                log::error!("failed to get llm response: {err}");
+
+                self.bot
+                    .set_message_reaction(chat_id, message_id)
+                    .reaction(vec![ReactionType::Emoji {
+                        emoji: "🖕".to_string(),
+                    }])
+                    .await?;
+            }
+        }
+
+        Ok(())
+    }
+
     async fn get_conversation(
         &self,
         chat_id: ChatId,

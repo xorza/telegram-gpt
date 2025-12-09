@@ -12,7 +12,7 @@ pub struct Conversation {
     pub system_prompt: Option<Message>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Message {
     pub role: MessageRole,
     pub tokens: usize,
@@ -88,6 +88,7 @@ impl Display for MessageRole {
         }
     }
 }
+
 impl TryFrom<u8> for MessageRole {
     type Error = ();
 
@@ -98,5 +99,11 @@ impl TryFrom<u8> for MessageRole {
             2 => Ok(MessageRole::Assistant),
             _ => Err(()),
         }
+    }
+}
+
+impl Default for MessageRole {
+    fn default() -> Self {
+        MessageRole::System
     }
 }
