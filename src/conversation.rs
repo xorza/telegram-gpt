@@ -5,7 +5,7 @@ use tiktoken_rs::{CoreBPE, get_bpe_from_model, o200k_base};
 #[derive(Debug)]
 pub struct Conversation {
     pub chat_id: u64,
-    pub turns: VecDeque<ChatTurn>,
+    pub history: VecDeque<Message>,
     pub prompt_tokens: usize,
     pub is_authorized: bool,
     pub openai_api_key: String,
@@ -13,18 +13,13 @@ pub struct Conversation {
 }
 
 #[derive(Debug, Clone)]
-pub struct ChatTurn {
-    pub user: Message,
-    pub assistant: Message,
-}
-
-#[derive(Debug, Clone)]
 pub struct Message {
-    pub text: String,
+    pub role: MessageRole,
     pub tokens: usize,
+    pub text: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum MessageRole {
     System = 0,
@@ -38,33 +33,27 @@ pub struct TokenCounter {
 }
 
 impl Conversation {
-    pub fn add_turn(&mut self, turn: ChatTurn) {
-        self.prompt_tokens += turn.total_tokens();
-        self.turns.push_back(turn);
+    pub fn add_messages(&mut self, messages: &[Message]) {
+        for message in messages {
+            self.prompt_tokens += message.tokens;
+            self.history.push_back(message.clone());
+        }
     }
 
     pub fn prune_to_token_budget(&mut self, max_prompt_tokens: usize) {
         while self.prompt_tokens > max_prompt_tokens {
-            if let Some(removed) = self.turns.pop_front() {
-                self.prompt_tokens = self.prompt_tokens.saturating_sub(removed.total_tokens());
+            if let Some(removed) = self.history.pop_front() {
+                self.prompt_tokens = self.prompt_tokens.saturating_sub(removed.tokens);
             }
         }
     }
 }
 
-impl ChatTurn {
-    fn total_tokens(&self) -> usize {
-        self.user.tokens + self.assistant.tokens
-    }
-}
-
 impl Message {
-    pub fn with_text_and_tokens(text: String, tokens: usize) -> Self {
-        Self { text, tokens }
-    }
-    pub fn with_text(text: String, tokenizer: &TokenCounter) -> Self {
+    pub fn with_text(role: MessageRole, text: String, tokenizer: &TokenCounter) -> Self {
         let tokens = tokenizer.count_text(&text);
-        Self::with_text_and_tokens(text, tokens)
+
+        Self { role, text, tokens }
     }
 }
 

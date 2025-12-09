@@ -13,39 +13,20 @@ enum ContentType {
     Output,
 }
 
-pub fn prepare_payload(
-    model: &str,
-    system_prompt: Option<&Message>,
-    conversation: &Conversation,
-    user_message: &Message,
-) -> serde_json::Value {
+pub fn prepare_payload(model: &str, messages: &[Message]) -> serde_json::Value {
     let mut input_items = Vec::new();
 
-    if let Some(prompt) = system_prompt {
+    for msg in messages {
         input_items.push(text_content(
-            MessageRole::System,
-            &prompt.text,
-            ContentType::Input,
+            msg.role,
+            &msg.text,
+            if msg.role == MessageRole::Assistant {
+                ContentType::Output
+            } else {
+                ContentType::Input
+            },
         ));
     }
-
-    for turn in &conversation.turns {
-        input_items.push(text_content(
-            MessageRole::User,
-            &turn.user.text,
-            ContentType::Input,
-        ));
-        input_items.push(text_content(
-            MessageRole::Assistant,
-            &turn.assistant.text,
-            ContentType::Output,
-        ));
-    }
-    input_items.push(text_content(
-        MessageRole::User,
-        &user_message.text,
-        ContentType::Input,
-    ));
 
     json!({
         "model": model,

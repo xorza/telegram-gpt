@@ -1,4 +1,4 @@
-use crate::conversation::{self, ChatTurn, Conversation, MessageRole, TokenCounter};
+use crate::conversation::{self, Conversation, Message, MessageRole, TokenCounter};
 use anyhow::Result;
 use rusqlite::{Connection, Error as SqliteError};
 use std::sync::Arc;
@@ -123,14 +123,18 @@ pub async fn load_conversation(
             }
 
             let system_prompt = if !system_prompt.is_empty() {
-                Some(conversation::Message::with_text(system_prompt, tokenizer))
+                Some(conversation::Message::with_text(
+                    MessageRole::System,
+                    system_prompt,
+                    tokenizer,
+                ))
             } else {
                 None
             };
 
             Conversation {
                 chat_id: chat_id.0 as u64,
-                turns: Default::default(),
+                history: Default::default(),
                 prompt_tokens: 0,
                 is_authorized,
                 openai_api_key: open_ai_api_key,
@@ -149,23 +153,22 @@ pub async fn load_conversation(
                 let tokens: usize = row.get(0)?;
                 let role: u8 = row.get(1)?;
                 let text: String = row.get(2)?;
-                Ok((
-                    MessageRole::try_from(role).expect("Invalid message role"),
-                    conversation::Message::with_text_and_tokens(text, tokens),
-                ))
+                let role = MessageRole::try_from(role).expect("Invalid message role");
+
+                Ok(conversation::Message { role, tokens, text })
             })?;
 
-            let mut history: Vec<(MessageRole, conversation::Message)> = Vec::new();
+            let mut history: Vec<conversation::Message> = Vec::new();
             let mut total_tokens: usize = 0;
 
             for row in rows {
-                if let Ok((role, message)) = row {
+                if let Ok(message) = row {
                     // Stop before adding a message that would push us over the budget.
                     if total_tokens + message.tokens > max_tokens {
                         break;
                     }
                     total_tokens += message.tokens;
-                    history.push((role, message));
+                    history.push(message);
                 }
             }
 
@@ -178,18 +181,16 @@ pub async fn load_conversation(
     let mut user_message: Option<conversation::Message> = None;
 
     // We collected newest-to-oldest; process oldest-first while respecting the token budget.
-    for (role, message) in history.into_iter().rev() {
+    for message in history.into_iter().rev() {
         conversation.prompt_tokens += message.tokens;
 
-        match role {
+        match message.role {
             MessageRole::User => {
                 user_message = Some(message);
             }
             MessageRole::Assistant => {
-                conversation.add_turn(ChatTurn {
-                    user: user_message.take().expect("Missing user message"),
-                    assistant: message,
-                });
+                conversation.add_message(user_message.take().expect("Missing user message"));
+                conversation.add_message(message);
             }
             _ => {
                 log::error!("Invalid message role in DB for chat {}", chat_id);
@@ -198,53 +199,40 @@ pub async fn load_conversation(
         }
     }
 
-    // Drop a trailing user message without assistant to avoid panic on malformed history.
-    if let Some(unpaired) = user_message.take() {
-        log::warn!(
+    if user_message.is_some() {
+        let error = format!(
             "Dropping trailing user message without assistant response for chat {}",
             chat_id
         );
-        conversation.prompt_tokens = conversation.prompt_tokens.saturating_sub(unpaired.tokens);
+        log::error!("{}", error);
+        panic!("{}", error)
     }
 
     log::info!(
         "Loaded conversation {} with {} messages and {} tokens",
         conversation.chat_id,
-        conversation.turns.len() * 2,
+        conversation.history.len() * 2,
         conversation.prompt_tokens
     );
 
     Ok(conversation)
 }
 
-pub async fn add_chat_turn(
+pub async fn add_messages(
     db: &Arc<Mutex<Connection>>,
     chat_id: ChatId,
-    turn: ChatTurn,
+    messages: &[Message],
 ) -> anyhow::Result<()> {
     // Ensure both user and assistant messages are persisted atomically.
     let mut conn = db.lock().await;
     let tx = conn.transaction()?;
 
-    tx.execute(
-        "INSERT INTO history (chat_id, tokens, role, text) VALUES (?1, ?2, ?3, ?4)",
-        rusqlite::params![
-            chat_id.0,
-            turn.user.tokens as i64,
-            MessageRole::User as u8,
-            turn.user.text
-        ],
-    )?;
-
-    tx.execute(
-        "INSERT INTO history (chat_id, tokens, role, text) VALUES (?1, ?2, ?3, ?4)",
-        rusqlite::params![
-            chat_id.0,
-            turn.assistant.tokens as i64,
-            MessageRole::Assistant as u8,
-            turn.assistant.text
-        ],
-    )?;
+    for msg in messages {
+        tx.execute(
+            "INSERT INTO history (chat_id, tokens, role, text) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![chat_id.0, msg.tokens as i64, msg.role as u8, msg.text],
+        )?;
+    }
 
     tx.commit()?;
 

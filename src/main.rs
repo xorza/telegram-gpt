@@ -6,7 +6,7 @@ mod openai_api;
 mod typing;
 
 use anyhow::{Context, anyhow};
-use conversation::{ChatTurn, Conversation, MessageRole, TokenCounter};
+use conversation::{Conversation, MessageRole, TokenCounter};
 use flexi_logger::{Cleanup, Criterion, Duplicate, FileSpec, Logger, Naming};
 use reqwest::header::PROXY_AUTHENTICATE;
 use rusqlite::Connection;
@@ -86,7 +86,8 @@ async fn process_message(app: App, bot: Bot, msg: Message) -> anyhow::Result<()>
             return Err(anyhow::anyhow!(error));
         }
 
-        let user_message = conversation::Message::with_text(user_text, &app.tokenizer);
+        let user_message =
+            conversation::Message::with_text(MessageRole::User, user_text, &app.tokenizer);
 
         let system_prompt_tokens = conversation.system_prompt.as_ref().map_or(0, |p| p.tokens);
         conversation.prune_to_token_budget(
@@ -111,18 +112,19 @@ async fn process_message(app: App, bot: Bot, msg: Message) -> anyhow::Result<()>
 
         match llm_result {
             Ok(answer) => {
-                let assistant_message =
-                    conversation::Message::with_text(answer.clone(), &app.tokenizer);
-                let turn = ChatTurn {
-                    user: user_message,
-                    assistant: assistant_message,
-                };
-                conversation.add_turn(turn.clone());
+                let assistant_message = conversation::Message::with_text(
+                    MessageRole::Assistant,
+                    answer,
+                    &app.tokenizer,
+                );
 
-                for chunk in split_message(&answer) {
+                conversation.add_messages(&[user_message.clone(), assistant_message.clone()]);
+
+                for chunk in split_message(&assistant_message.text) {
                     bot.send_message(chat_id, chunk).await?;
                 }
-                db::add_chat_turn(&app.db, chat_id, turn).await?;
+
+                db::add_messages(&app.db, chat_id, &[user_message, assistant_message]).await?;
             }
             Err(err) => {
                 log::error!("failed to get llm response: {err}");
