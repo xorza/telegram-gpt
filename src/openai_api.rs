@@ -1,10 +1,7 @@
-use std::panic::AssertUnwindSafe;
-
-use crate::conversation::{Conversation, Message, MessageRole};
-use anyhow::{Context, anyhow};
+use crate::conversation::{Message, MessageRole};
+use anyhow::anyhow;
 use futures_util::StreamExt;
 use reqwest::Client;
-use rusqlite::OpenFlags;
 use serde_json::json;
 
 #[derive(Debug)]
@@ -156,24 +153,50 @@ where
 
             for line in event_text.lines() {
                 let line = line.trim();
+                // SSE done signals
                 if line.starts_with("event: response.output_text.done")
+                    || line.starts_with("event: response.refusal.done")
+                    || line.starts_with("event: response.output_item.done")
                     || line.starts_with("event: response.completed")
                 {
+                    log::warn!("exit line: {}", line);
                     on_delta(String::new(), true).await?;
                     return Ok(full_answer);
                 }
+
                 if !line.starts_with("data:") {
                     continue;
                 }
 
                 let data = line.trim_start_matches("data:").trim();
 
+                if data.starts_with("[DONE]") {
+                    on_delta(String::new(), true).await?;
+                    return Ok(full_answer);
+                }
+
                 let value: serde_json::Value = serde_json::from_str(data)?;
-                if let Some(delta) = value.get("delta").and_then(|v| v.as_str()) {
-                    full_answer.push_str(delta);
-                    on_delta(delta.to_string(), false).await?;
-                } else {
-                    // it's okay
+                let event_type = value
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+
+                match event_type {
+                    "response.output_text.delta" | "response.refusal.delta" => {
+                        if let Some(delta) = extract_stream_delta(&value) {
+                            full_answer.push_str(&delta);
+                            on_delta(delta, false).await?;
+                        }
+                    }
+                    "response.output_text.done"
+                    | "response.refusal.done"
+                    | "response.output_item.done"
+                    | "response.completed" => {
+                        panic!("Unexpected event type")
+                    }
+                    _ => {
+                        // Ignore other event types.
+                    }
                 }
             }
         }
@@ -234,6 +257,40 @@ fn extract_output_text(value: &serde_json::Value) -> Option<String> {
         }
         if !chunks.is_empty() {
             return Some(chunks.join("\n"));
+        }
+    }
+
+    None
+}
+
+fn extract_stream_delta(value: &serde_json::Value) -> Option<String> {
+    if let Some(delta) = value.get("delta").and_then(|v| v.as_str()) {
+        if !delta.is_empty() {
+            return Some(delta.to_string());
+        }
+    }
+
+    if let Some(output) = value.get("output").and_then(|v| v.as_array()) {
+        let mut chunks = Vec::new();
+        for item in output {
+            if let Some(content) = item.get("content").and_then(|v| v.as_array()) {
+                for part in content {
+                    if part.get("type").and_then(|t| t.as_str()) == Some("output_text") {
+                        if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                            chunks.push(text);
+                        }
+                    } else if part.get("type").and_then(|t| t.as_str()) == Some("text") {
+                        if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                            chunks.push(text);
+                        }
+                    } else if let Some(delta) = part.get("delta").and_then(|d| d.as_str()) {
+                        chunks.push(delta);
+                    }
+                }
+            }
+        }
+        if !chunks.is_empty() {
+            return Some(chunks.join(""));
         }
     }
 
