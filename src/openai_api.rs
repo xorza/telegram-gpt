@@ -3,6 +3,7 @@ use std::panic::AssertUnwindSafe;
 use crate::DynError;
 use crate::conversation::{Conversation, Message, MessageRole};
 use anyhow::{Context, anyhow};
+use futures_util::StreamExt;
 use reqwest::Client;
 use rusqlite::OpenFlags;
 use serde_json::json;
@@ -47,6 +48,7 @@ where
     })
 }
 
+#[allow(dead_code)]
 pub async fn send(
     http: &Client,
     api_key: &str,
@@ -76,6 +78,71 @@ pub async fn send(
     }
 
     Err(format!("OpenAI response missing text output: {response_body}").into())
+}
+
+pub async fn send_stream<F, Fut>(
+    http: &Client,
+    api_key: &str,
+    mut payload: serde_json::Value,
+    mut on_delta: F,
+) -> anyhow::Result<(), DynError>
+where
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
+{
+    // Ensure streaming is enabled on the request payload.
+    if let Some(obj) = payload.as_object_mut() {
+        obj.insert("stream".to_string(), json!(true));
+    }
+
+    let response = http
+        .post("https://api.openai.com/v1/responses")
+        .bearer_auth(api_key)
+        .json(&payload)
+        .send()
+        .await?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body_text = response.text().await?;
+        return Err(format!("OpenAI Responses API error {status}: {body_text}").into());
+    }
+
+    let mut stream = response.bytes_stream();
+    let mut buffer: Vec<u8> = Vec::new();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        buffer.extend_from_slice(&chunk);
+
+        while let Some(event) = pop_next_event(&mut buffer) {
+            let event_text = String::from_utf8_lossy(&event);
+
+            for line in event_text.lines() {
+                let line = line.trim();
+                if !line.starts_with("data:") {
+                    continue;
+                }
+
+                let data = line.trim_start_matches("data:").trim();
+
+                // Streaming sentinel from OpenAI
+                if data == "[DONE]" {
+                    return Ok(());
+                }
+
+                let value: serde_json::Value = serde_json::from_str(data)?;
+
+                if let Some(delta) = extract_stream_delta(&value) {
+                    if !delta.is_empty() {
+                        on_delta(delta).await?;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn text_content(role: MessageRole, text: &str, content_type: ContentType) -> serde_json::Value {
@@ -127,6 +194,57 @@ fn extract_output_text(value: &serde_json::Value) -> Option<String> {
         }
         if !chunks.is_empty() {
             return Some(chunks.join("\n"));
+        }
+    }
+
+    None
+}
+
+fn pop_next_event(buffer: &mut Vec<u8>) -> Option<Vec<u8>> {
+    fn find_separator(buf: &[u8]) -> Option<(usize, usize)> {
+        let mut i = 0;
+        while i + 1 < buf.len() {
+            if i + 3 < buf.len() && &buf[i..i + 4] == b"\r\n\r\n" {
+                return Some((i, 4));
+            }
+            if &buf[i..i + 2] == b"\n\n" {
+                return Some((i, 2));
+            }
+            i += 1;
+        }
+        None
+    }
+
+    let (idx, sep_len) = find_separator(buffer)?;
+    let event: Vec<u8> = buffer.drain(..idx).collect();
+    buffer.drain(..sep_len);
+    Some(event)
+}
+
+fn extract_stream_delta(value: &serde_json::Value) -> Option<String> {
+    if let Some(delta) = value.get("delta").and_then(|d| d.as_str()) {
+        if !delta.is_empty() {
+            return Some(delta.to_string());
+        }
+    }
+
+    if let Some(output) = value.get("output").and_then(|v| v.as_array()) {
+        let mut chunks = Vec::new();
+        for item in output {
+            if let Some(content) = item.get("content").and_then(|v| v.as_array()) {
+                for part in content {
+                    if part.get("type").and_then(|t| t.as_str()) == Some("text_delta") {
+                        if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                            chunks.push(text);
+                        }
+                    } else if let Some(delta) = part.get("delta").and_then(|d| d.as_str()) {
+                        chunks.push(delta);
+                    }
+                }
+            }
+        }
+        if !chunks.is_empty() {
+            return Some(chunks.join(""));
         }
     }
 

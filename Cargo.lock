@@ -1968,6 +1968,7 @@ dependencies = [
  "diesel",
  "dotenv",
  "flexi_logger",
+ "futures-util",
  "log",
  "reqwest",
  "rusqlite",

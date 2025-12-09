@@ -107,7 +107,17 @@ async fn process_message(app: App, bot: Bot, msg: Message) -> anyhow::Result<()>
         (user_message, payload, conversation.openai_api_key.clone())
     };
 
-    let llm_result = openai_api::send(&app.http_client, &openai_api_key, payload).await;
+    let streaming = true; // toggle streaming behavior
+    let llm_result = fetch_and_deliver(
+        streaming,
+        bot.clone(),
+        chat_id,
+        &app.http_client,
+        &openai_api_key,
+        payload,
+    )
+    .await;
+
     drop(typing_indicator);
 
     {
@@ -120,10 +130,6 @@ async fn process_message(app: App, bot: Bot, msg: Message) -> anyhow::Result<()>
                     answer,
                     &app.tokenizer,
                 );
-
-                for chunk in split_message(&assistant_message.text) {
-                    bot.send_message(chat_id, chunk).await?;
-                }
 
                 let messages = [user_message, assistant_message];
 
@@ -143,6 +149,85 @@ async fn process_message(app: App, bot: Bot, msg: Message) -> anyhow::Result<()>
     }
 
     Ok(())
+}
+
+struct StreamState {
+    full_answer: String,
+    buffer: String,
+}
+
+async fn fetch_and_deliver(
+    streaming: bool,
+    bot: Bot,
+    chat_id: ChatId,
+    http: &reqwest::Client,
+    api_key: &str,
+    payload: serde_json::Value,
+) -> anyhow::Result<String, DynError> {
+    if !streaming {
+        let answer = openai_api::send(http, api_key, payload).await?;
+        for chunk in split_message(&answer) {
+            bot.send_message(chat_id, chunk).await?;
+        }
+        return Ok(answer);
+    }
+
+    fn take_prefix(buf: &mut String, max_chars: usize) -> String {
+        let mut char_idx = 0usize;
+        let mut byte_split = buf.len();
+        for (i, _) in buf.char_indices() {
+            if char_idx == max_chars {
+                byte_split = i;
+                break;
+            }
+            char_idx += 1;
+        }
+        let tail = buf.split_off(byte_split);
+        std::mem::replace(buf, tail)
+    }
+
+    let state = Arc::new(tokio::sync::Mutex::new(StreamState {
+        full_answer: String::new(),
+        buffer: String::new(),
+    }));
+
+    openai_api::send_stream(http, api_key, payload, {
+        let bot = bot.clone();
+        let state = state.clone();
+        move |delta| {
+            let bot = bot.clone();
+            let state = state.clone();
+            async move {
+                let mut st = state.lock().await;
+                st.full_answer.push_str(&delta);
+                st.buffer.push_str(&delta);
+
+                while st.buffer.chars().count() >= TELEGRAM_MAX_MESSAGE_LENGTH {
+                    let chunk = take_prefix(&mut st.buffer, TELEGRAM_MAX_MESSAGE_LENGTH);
+                    let to_send = chunk.clone();
+                    drop(st);
+                    bot.send_message(chat_id, to_send).await?;
+                    st = state.lock().await;
+                }
+
+                Ok(())
+            }
+        }
+    })
+    .await?;
+
+    // Flush any remaining buffered text after streaming completes.
+    {
+        let mut st = state.lock().await;
+        if !st.buffer.is_empty() {
+            let to_send = std::mem::take(&mut st.buffer);
+            drop(st);
+            bot.send_message(chat_id, to_send).await?;
+        }
+    }
+
+    let answer = state.lock().await.full_answer.clone();
+    Ok(answer)
 }
 
 async fn init() -> anyhow::Result<App, anyhow::Error> {
