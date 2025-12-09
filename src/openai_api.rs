@@ -80,6 +80,7 @@ pub async fn send(
     Err(format!("OpenAI response missing text output: {response_body}").into())
 }
 
+#[allow(dead_code)]
 pub async fn send_stream<F, Fut>(
     http: &Client,
     api_key: &str,
