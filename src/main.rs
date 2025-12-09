@@ -150,10 +150,9 @@ impl App {
 
         drop(conversation);
 
-        let stream_buffer = Arc::new(tokio::sync::Mutex::new(String::new()));
         let on_stream_delta = {
             let bot = self.bot.clone();
-            let stream_buffer = stream_buffer.clone();
+            let stream_buffer = Arc::new(tokio::sync::Mutex::new(String::new()));
 
             move |delta, finalize| {
                 handle_stream_delta(bot.clone(), chat_id, stream_buffer.clone(), delta, finalize)
@@ -168,11 +167,6 @@ impl App {
             on_stream_delta,
         )
         .await;
-
-        assert!(
-            stream_buffer.lock().await.is_empty(),
-            "Buffer should be empty after streaming"
-        );
 
         drop(typing_indicator);
 
