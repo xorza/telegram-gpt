@@ -60,11 +60,6 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-struct PreparedRequest {
-    payload: serde_json::Value,
-    openai_api_key: String,
-}
-
 async fn init() -> anyhow::Result<App, anyhow::Error> {
     dotenv::dotenv().ok();
 
@@ -145,17 +140,43 @@ impl App {
         }
 
         let chat_id = msg.chat.id;
-        let typing_indicator = TypingIndicator::new(self.bot.clone(), chat_id);
         let user_text = msg.text().unwrap().to_owned();
         let user_message =
             conversation::Message::with_text(MessageRole::User, user_text, &self.tokenizer);
 
+        let typing_indicator = TypingIndicator::new(self.bot.clone(), chat_id);
+
         log::info!("received message from chat {chat_id}");
 
-        let PreparedRequest {
-            payload,
-            openai_api_key,
-        } = self.prepare_request(chat_id, &user_message).await?;
+        let mut conversation = self.get_conversation(chat_id).await?;
+        if !conversation.is_authorized {
+            log::warn!("Unauthorized user {}", chat_id);
+
+            let message = format!(
+                "You are not authorized to use this bot. Chat id {}",
+                chat_id
+            );
+            self.bot.send_message(msg.chat.id, &message).await?;
+            return Ok(());
+        }
+
+        let system_prompt_tokens = conversation.system_prompt.as_ref().map_or(0, |p| p.tokens);
+        conversation.prune_to_token_budget(
+            self.max_prompt_tokens - system_prompt_tokens - user_message.tokens,
+        );
+
+        let payload = openai_api::prepare_payload(
+            &self.model,
+            conversation
+                .system_prompt
+                .as_ref()
+                .into_iter()
+                .chain(conversation.history.iter())
+                .chain(std::iter::once(&user_message)),
+        );
+        let openai_api_key = conversation.openai_api_key.clone();
+
+        drop(conversation);
 
         let llm_result = openai_api::send(&self.http_client, &openai_api_key, payload).await;
 
@@ -193,39 +214,6 @@ impl App {
         }
 
         Ok(())
-    }
-
-    async fn prepare_request(
-        &self,
-        chat_id: ChatId,
-        user_message: &conversation::Message,
-    ) -> anyhow::Result<PreparedRequest> {
-        let mut conversation = self.get_conversation(chat_id).await?;
-        if !conversation.is_authorized {
-            let error = format!("Unauthorized user {}", chat_id);
-            log::warn!("{}", error);
-            return Err(anyhow::anyhow!(error));
-        }
-
-        let system_prompt_tokens = conversation.system_prompt.as_ref().map_or(0, |p| p.tokens);
-        conversation.prune_to_token_budget(
-            self.max_prompt_tokens - system_prompt_tokens - user_message.tokens,
-        );
-
-        let payload = openai_api::prepare_payload(
-            &self.model,
-            conversation
-                .system_prompt
-                .as_ref()
-                .into_iter()
-                .chain(conversation.history.iter())
-                .chain(std::iter::once(user_message)),
-        );
-
-        Ok(PreparedRequest {
-            payload,
-            openai_api_key: conversation.openai_api_key.clone(),
-        })
     }
 
     async fn get_conversation(
