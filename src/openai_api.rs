@@ -153,12 +153,9 @@ where
 
             for line in event_text.lines() {
                 let line = line.trim();
-                log::warn!("Line: {}", line);
 
                 // SSE done signals
                 if line.starts_with("event: response.output_text.done")
-                    || line.starts_with("event: response.refusal.done")
-                    || line.starts_with("event: response.output_item.done")
                     || line.starts_with("event: response.completed")
                 {
                     on_delta(String::new(), true).await?;
