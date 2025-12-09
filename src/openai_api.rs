@@ -14,7 +14,7 @@ enum ContentType {
     Output,
 }
 
-pub fn prepare_payload<'a, I>(model: &str, messages: I) -> serde_json::Value
+pub fn prepare_payload<'a, I>(model: &str, messages: I, stream: bool) -> serde_json::Value
 where
     I: IntoIterator<Item = &'a Message>,
 {
@@ -44,7 +44,8 @@ where
                 // }
             }
         ],
-        "tool_choice": "auto"
+        "tool_choice": "auto",
+        "stream": stream,
     })
 }
 
@@ -84,18 +85,13 @@ pub async fn send(
 pub async fn send_stream<F, Fut>(
     http: &Client,
     api_key: &str,
-    mut payload: serde_json::Value,
+    payload: serde_json::Value,
     mut on_delta: F,
 ) -> anyhow::Result<(), DynError>
 where
     F: FnMut(String) -> Fut,
     Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
 {
-    // Ensure streaming is enabled on the request payload.
-    if let Some(obj) = payload.as_object_mut() {
-        obj.insert("stream".to_string(), json!(true));
-    }
-
     let response = http
         .post("https://api.openai.com/v1/responses")
         .bearer_auth(api_key)

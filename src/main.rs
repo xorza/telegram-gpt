@@ -27,6 +27,7 @@ type DynError = Box<dyn std::error::Error + Send + Sync>;
 
 const DEFAULT_OPEN_AI_MODEL: &str = "gpt-4.1";
 const TELEGRAM_MAX_MESSAGE_LENGTH: usize = 4096;
+const STREAM_RESPONSE: bool = true;
 
 #[derive(Clone)]
 struct App {
@@ -169,7 +170,7 @@ impl App {
             .chain(conversation.history.iter())
             .chain(std::iter::once(&user_message));
 
-        let payload = openai_api::prepare_payload(&self.model, history);
+        let payload = openai_api::prepare_payload(&self.model, history, STREAM_RESPONSE);
         let openai_api_key = conversation.openai_api_key.clone();
 
         drop(conversation);
