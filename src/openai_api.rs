@@ -159,7 +159,6 @@ where
                     || line.starts_with("event: response.output_item.done")
                     || line.starts_with("event: response.completed")
                 {
-                    log::warn!("exit line: {}", line);
                     on_delta(String::new(), true).await?;
                     return Ok(full_answer);
                 }
