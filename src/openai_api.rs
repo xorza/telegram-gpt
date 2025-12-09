@@ -156,7 +156,9 @@ where
 
             for line in event_text.lines() {
                 let line = line.trim();
-                if line.starts_with("event: response.output_text.done") {
+                if line.starts_with("event: response.output_text.done")
+                    || line.starts_with("event: response.completed")
+                {
                     on_delta(String::new(), true).await?;
                     return Ok(full_answer);
                 }
@@ -167,14 +169,12 @@ where
                 let data = line.trim_start_matches("data:").trim();
 
                 let value: serde_json::Value = serde_json::from_str(data)?;
-                let delta = value
-                    .get("delta")
-                    .expect("delta field not found")
-                    .as_str()
-                    .expect("delta value not a string");
-
-                full_answer.push_str(delta);
-                on_delta(delta.to_string(), false).await?;
+                if let Some(delta) = value.get("delta").and_then(|v| v.as_str()) {
+                    full_answer.push_str(delta);
+                    on_delta(delta.to_string(), false).await?;
+                } else {
+                    // it's okay
+                }
             }
         }
     }
