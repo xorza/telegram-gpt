@@ -6,7 +6,7 @@ authors = []
 
 [dependencies]
 teloxide = { version = "0.17", features = ["macros"] }
-tokio = { version = "1.48", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1.48", features = ["rt-multi-thread", "macros", "process"] }
 flexi_logger = { version = "0.27", features = ["compress"] }
 dotenv = "0.15"
 log = "0.4"

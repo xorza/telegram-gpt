@@ -9,11 +9,12 @@ use anyhow::{Context, anyhow};
 use conversation::{Conversation, MessageRole, TokenCounter};
 use diesel::dsl::Find;
 use flexi_logger::{Cleanup, Criterion, Duplicate, FileSpec, Logger, Naming};
+use log::error;
 use reqwest::header::PROXY_AUTHENTICATE;
 use rusqlite::Connection;
 use serde_json::Value;
 use std::fmt::Debug;
-use std::{clone, process};
+use std::process::Stdio;
 use std::{collections::HashMap, path::Path, sync::Arc};
 use teloxide::RequestError;
 use teloxide::types::CopyTextButton;
@@ -21,7 +22,11 @@ use teloxide::{
     prelude::*,
     types::{ChatId, MessageId, ReactionType},
 };
-use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    process::Command,
+    sync::{MappedMutexGuard, Mutex, MutexGuard},
+};
 use typing::TypingIndicator;
 
 const DEFAULT_OPEN_AI_MODEL: &str = "gpt-4.1";
@@ -188,20 +193,60 @@ impl App {
             .add_messages(messages.iter().cloned());
         db::add_messages(&self.db, chat_id, messages.into_iter()).await;
 
-        self.postprocess_and_send(chat_id, assistant_text).await?;
+        let blocks = self.postprocess(assistant_text).await;
+        for block in blocks {
+            self.bot.send_message(chat_id, block).await?;
+        }
 
         Ok(())
     }
 
-    async fn postprocess_and_send(
-        &self,
-        chat_id: ChatId,
-        assistant_text: String,
-    ) -> anyhow::Result<()> {
+    async fn postprocess(&self, assistant_text: String) -> Vec<String> {
+        let mut child = Command::new("python3")
+            .arg("telegramify.py")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn telegramify.py");
 
-        
-        
-        Ok(())
+        let mut stdin = child.stdin.take().expect("Failed to take stdin");
+        stdin
+            .write_all(assistant_text.as_bytes())
+            .await
+            .expect("failed to write to telegramify stdin");
+        stdin
+            .shutdown()
+            .await
+            .expect("failed to close telegramify stdin");
+
+        let mut stdout_buf = Vec::new();
+        let mut stdout = child.stdout.take().expect("Failed to take stdout");
+        let _ = stdout
+            .read_to_end(&mut stdout_buf)
+            .await
+            .context("failed to read telegramify stdout");
+
+        let mut stderr_buf = Vec::new();
+        let mut stderr = child.stderr.take().expect("Failed to take stderr");
+        let _ = stderr
+            .read_to_end(&mut stderr_buf)
+            .await
+            .context("failed to read telegramify stderr");
+
+        let status = child.wait().await.context("failed to wait for telegramify");
+        if let Err(status) = status {
+            let err_txt = String::from_utf8_lossy(&stderr_buf);
+            let err_txt = format!("telegramify.py exited with {status}: {err_txt}");
+            log::error!("{}", err_txt);
+            panic!("{}", err_txt)
+        }
+
+        stdout_buf
+            .split(|b| *b == 0)
+            .filter(|b| !b.is_empty())
+            .map(|block| String::from_utf8_lossy(block).to_string())
+            .collect::<Vec<String>>()
     }
 
     async fn get_conversation(&self, chat_id: ChatId) -> MappedMutexGuard<'_, Conversation> {
