@@ -6,19 +6,22 @@ from telegramify_markdown.interpreters import InterpreterChain, TextInterpreter
 from telegramify_markdown.type import ContentTypes
 
 
-async def main():
-    # Read entire stdin as the markdown source.
+def main() -> int:
     md = sys.stdin.read()
 
     interpreter_chain = InterpreterChain([TextInterpreter()])
 
-    boxes = await telegramify_markdown.telegramify(
-        content=md,
-        interpreters_use=interpreter_chain,
-        latex_escape=True,
-        normalize_whitespace=True,
-        max_word_count=4090,
-    )
+    async def run():
+        return await telegramify_markdown.telegramify(
+            content=md,
+            interpreters_use=interpreter_chain,
+            latex_escape=True,
+            normalize_whitespace=True,
+            max_word_count=4090,
+        )
+
+    # Block until the async processing finishes, but keep a simple sync interface.
+    boxes = asyncio.run(run())
 
     for item in boxes:
         if item.content_type == ContentTypes.TEXT:
@@ -27,7 +30,8 @@ async def main():
             sys.stdout.buffer.write(b"\0")
 
     sys.stdout.flush()
+    return 0
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    raise SystemExit(main())
