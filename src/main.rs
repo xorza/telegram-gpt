@@ -127,8 +127,8 @@ async fn process_message(app: App, bot: Bot, msg: Message) -> anyhow::Result<()>
 
                 let messages = [user_message, assistant_message];
 
-                db::add_messages(&app.db, chat_id, &messages).await?;
-                conversation.add_messages(messages.into_iter());
+                conversation.add_messages(messages.iter().cloned());
+                db::add_messages(&app.db, chat_id, messages.into_iter()).await?;
             }
             Err(err) => {
                 log::error!("failed to get llm response: {err}");

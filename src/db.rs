@@ -218,11 +218,14 @@ pub async fn load_conversation(
     Ok(conversation)
 }
 
-pub async fn add_messages(
+pub async fn add_messages<'a, I>(
     db: &Arc<Mutex<Connection>>,
     chat_id: ChatId,
-    messages: &[Message],
-) -> anyhow::Result<()> {
+    messages: I,
+) -> anyhow::Result<()>
+where
+    I: IntoIterator<Item = Message>,
+{
     // Ensure both user and assistant messages are persisted atomically.
     let mut conn = db.lock().await;
     let tx = conn.transaction()?;
