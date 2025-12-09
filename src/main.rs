@@ -235,9 +235,11 @@ async fn handle_stream_delta(
     delta: String,
     finalize: bool,
 ) -> anyhow::Result<()> {
+    // Accumulate incoming delta into the shared buffer.
     let mut buf = stream_buffer.lock().await;
     buf.push_str(&delta);
 
+    // Remove and return the first `max_chars` characters, preserving UTF-8 boundaries.
     fn take_prefix(buf: &mut String, max_chars: usize) -> String {
         let mut char_idx = 0usize;
         let mut byte_split = buf.len();
@@ -255,6 +257,7 @@ async fn handle_stream_delta(
         std::mem::replace(buf, tail)
     }
 
+    // Send full Telegram-sized chunks as soon as they accumulate.
     while buf.chars().count() >= TELEGRAM_MAX_MESSAGE_LENGTH {
         let chunk = take_prefix(&mut buf, TELEGRAM_MAX_MESSAGE_LENGTH);
         let to_send = chunk.clone();
@@ -263,6 +266,7 @@ async fn handle_stream_delta(
         buf = stream_buffer.lock().await;
     }
 
+    // On final signal, flush any remainder.
     if finalize && !buf.is_empty() {
         let to_send = std::mem::take(&mut *buf);
         drop(buf);
