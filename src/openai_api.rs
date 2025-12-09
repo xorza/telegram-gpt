@@ -45,35 +45,11 @@ where
     })
 }
 
-#[allow(dead_code)]
-pub async fn send<F, Fut>(
+pub async fn send(
     http: &Client,
     api_key: &str,
     payload: serde_json::Value,
-    stream: bool,
-    on_delta: F,
-) -> anyhow::Result<String>
-where
-    F: FnMut(String, bool) -> Fut,
-    Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
-{
-    if stream {
-        send_streaming(http, api_key, payload, on_delta).await
-    } else {
-        send_no_streaming(http, api_key, payload, on_delta).await
-    }
-}
-
-async fn send_no_streaming<F, Fut>(
-    http: &Client,
-    api_key: &str,
-    payload: serde_json::Value,
-    mut on_delta: F,
-) -> anyhow::Result<String>
-where
-    F: FnMut(String, bool) -> Fut,
-    Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
-{
+) -> anyhow::Result<String> {
     let response = http
         .post("https://api.openai.com/v1/responses")
         .bearer_auth(api_key)
@@ -96,7 +72,6 @@ where
         let trimmed = text.trim();
         if !trimmed.is_empty() {
             let owned = trimmed.to_string();
-            on_delta(owned.clone(), true).await?;
             return Ok(owned);
         }
     }
@@ -104,106 +79,6 @@ where
     Err(anyhow::anyhow!(
         "OpenAI response missing text output: {response_body}"
     ))
-}
-
-async fn send_streaming<F, Fut>(
-    http: &Client,
-    api_key: &str,
-    payload: serde_json::Value,
-    mut on_delta: F,
-) -> anyhow::Result<String>
-where
-    F: FnMut(String, bool) -> Fut,
-    Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
-{
-    let response = http
-        .post("https://api.openai.com/v1/responses")
-        .bearer_auth(api_key)
-        .json(&payload)
-        .send()
-        .await?;
-
-    let status = response.status();
-    if !status.is_success() {
-        let body_text = response.text().await?;
-        return Err(anyhow::anyhow!(
-            "OpenAI Responses API error {status}: {body_text}"
-        ));
-    }
-
-    let mut stream = response.bytes_stream();
-    let mut buffer: Vec<u8> = Vec::new();
-    let mut full_answer = String::new();
-
-    while let Some(chunk) = stream.next().await {
-        if let Err(err) = chunk {
-            if full_answer.is_empty() {
-                return Err(err.into());
-            }
-
-            on_delta(String::new(), true).await?;
-            return Ok(full_answer);
-        } else {
-            let chunk = chunk.unwrap();
-            buffer.extend(chunk);
-        }
-
-        while let Some(event) = pop_next_event(&mut buffer) {
-            let event_text = String::from_utf8_lossy(&event);
-
-            for line in event_text.lines() {
-                let line = line.trim();
-
-                // SSE done signals
-                if line.starts_with("event: response.output_text.done")
-                    || line.starts_with("event: response.completed")
-                {
-                    on_delta(String::new(), true).await?;
-                    return Ok(full_answer);
-                }
-
-                if !line.starts_with("data:") {
-                    continue;
-                }
-
-                let data = line.trim_start_matches("data:").trim();
-
-                if data.starts_with("[DONE]") {
-                    on_delta(String::new(), true).await?;
-                    return Ok(full_answer);
-                }
-
-                let value: serde_json::Value = serde_json::from_str(data)?;
-                let event_type = value
-                    .get("type")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-
-                match event_type {
-                    "response.output_text.delta" | "response.refusal.delta" => {
-                        if let Some(delta) = extract_stream_delta(&value) {
-                            full_answer.push_str(&delta);
-                            on_delta(delta, false).await?;
-                        }
-                    }
-                    "response.output_text.done"
-                    | "response.refusal.done"
-                    | "response.output_item.done"
-                    | "response.completed" => {
-                        panic!("Unexpected event type")
-                    }
-                    _ => {
-                        // Ignore other event types.
-                    }
-                }
-            }
-        }
-    }
-
-    // If stream ended without explicit DONE, still signal completion once.
-    on_delta(String::new(), true).await?;
-
-    Ok(full_answer)
 }
 
 fn text_content(role: MessageRole, text: &str, content_type: ContentType) -> serde_json::Value {
@@ -259,61 +134,6 @@ fn extract_output_text(value: &serde_json::Value) -> Option<String> {
     }
 
     None
-}
-
-fn extract_stream_delta(value: &serde_json::Value) -> Option<String> {
-    if let Some(delta) = value.get("delta").and_then(|v| v.as_str()) {
-        if !delta.is_empty() {
-            return Some(delta.to_string());
-        }
-    }
-
-    if let Some(output) = value.get("output").and_then(|v| v.as_array()) {
-        let mut chunks = Vec::new();
-        for item in output {
-            if let Some(content) = item.get("content").and_then(|v| v.as_array()) {
-                for part in content {
-                    if part.get("type").and_then(|t| t.as_str()) == Some("output_text") {
-                        if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
-                            chunks.push(text);
-                        }
-                    } else if part.get("type").and_then(|t| t.as_str()) == Some("text") {
-                        if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
-                            chunks.push(text);
-                        }
-                    } else if let Some(delta) = part.get("delta").and_then(|d| d.as_str()) {
-                        chunks.push(delta);
-                    }
-                }
-            }
-        }
-        if !chunks.is_empty() {
-            return Some(chunks.join(""));
-        }
-    }
-
-    None
-}
-
-fn pop_next_event(buffer: &mut Vec<u8>) -> Option<Vec<u8>> {
-    fn find_separator(buf: &[u8]) -> Option<(usize, usize)> {
-        let mut i = 0;
-        while i + 1 < buf.len() {
-            if i + 3 < buf.len() && &buf[i..i + 4] == b"\r\n\r\n" {
-                return Some((i, 4));
-            }
-            if &buf[i..i + 2] == b"\n\n" {
-                return Some((i, 2));
-            }
-            i += 1;
-        }
-        None
-    }
-
-    let (idx, sep_len) = find_separator(buffer)?;
-    let event: Vec<u8> = buffer.drain(..idx).collect();
-    buffer.drain(..sep_len);
-    Some(event)
 }
 
 pub fn context_length(model: &str) -> usize {

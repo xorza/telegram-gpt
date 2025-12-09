@@ -7,31 +7,30 @@ use tokio::sync::Mutex;
 
 const SCHEMA_VERSION: i32 = 1;
 
-pub fn init_db() -> Result<Connection> {
+pub fn init_db() -> Connection {
     let db_path = std::env::var("SQLITE_PATH").unwrap_or_else(|_| "data/db.sqlite".to_string());
 
     // Ensure parent directory exists
     if let Some(parent) = std::path::Path::new(&db_path).parent() {
         if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
+            std::fs::create_dir_all(parent).expect("Failed to create parent directory");
         }
     }
 
-    let conn = Connection::open(&db_path)?;
-
-    // Enable WAL for better concurrency; ignore errors silently.
-    // let _ = conn.pragma_update(None, "journal_mode", "WAL");
+    let conn = Connection::open(&db_path).expect("Failed to open database");
 
     match std::env::var("DB_ENCRYPTION_KEY") {
-        Ok(key) if !key.is_empty() => conn.pragma_update(None, "key", &key)?,
+        Ok(key) if !key.is_empty() => conn
+            .pragma_update(None, "key", &key)
+            .expect("Failed to set encryption key"),
         _ => log::warn!("DB_ENCRYPTION_KEY not set; database will be unencrypted"),
     }
 
     // Initialize database schema if needed and validate version.
-    let version = get_schema_version(&conn)?;
+    let version = get_schema_version(&conn);
     if version == 0 {
-        init_schema(&conn)?;
-        set_schema_version(&conn, SCHEMA_VERSION)?;
+        init_schema(&conn);
+        set_schema_version(&conn, SCHEMA_VERSION);
         log::info!("Initialized database schema version {}", SCHEMA_VERSION);
     } else if version != SCHEMA_VERSION {
         panic!(
@@ -42,10 +41,10 @@ pub fn init_db() -> Result<Connection> {
         log::info!("Database schema version {} detected", version);
     }
 
-    Ok(conn)
+    conn
 }
 
-fn init_schema(conn: &Connection) -> Result<(), SqliteError> {
+fn init_schema(conn: &Connection) {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -55,7 +54,8 @@ fn init_schema(conn: &Connection) -> Result<(), SqliteError> {
             text    TEXT NOT NULL
         )",
         [],
-    )?;
+    )
+    .expect("Failed to create history table");
 
     conn.execute(
         "CREATE TABLE IF NOT EXISTS chats (
@@ -65,17 +65,18 @@ fn init_schema(conn: &Connection) -> Result<(), SqliteError> {
             system_prompt    TEXT NOT NULL
         )",
         [],
-    )?;
-
-    Ok(())
+    )
+    .expect("Failed to create chats table");
 }
 
-fn get_schema_version(conn: &Connection) -> Result<i32, SqliteError> {
+fn get_schema_version(conn: &Connection) -> i32 {
     conn.query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("Failed to get schema version")
 }
 
-fn set_schema_version(conn: &Connection, version: i32) -> Result<(), SqliteError> {
+fn set_schema_version(conn: &Connection, version: i32) {
     conn.pragma_update(None, "user_version", version)
+        .expect("Failed to set schema version");
 }
 
 pub async fn load_conversation(
@@ -83,31 +84,36 @@ pub async fn load_conversation(
     chat_id: ChatId,
     tokenizer: &TokenCounter,
     max_tokens: usize,
-) -> anyhow::Result<Conversation> {
+) -> Conversation {
     let (mut conversation, history) = {
         let conn = db.lock().await;
 
         let conversation = {
             // Fetch exactly one chat row; panic if multiple rows are found.
-            let mut stmt = conn.prepare(
-                "SELECT is_authorized, open_ai_api_key, system_prompt \
-            FROM chats WHERE chat_id = ?1 LIMIT 2",
-            )?;
-            let mut rows = stmt.query([chat_id.0])?;
+            let mut stmt = conn
+                .prepare(
+                    "SELECT is_authorized, open_ai_api_key, system_prompt FROM chats WHERE chat_id = ?1 LIMIT 2",
+                )
+                .expect("Failed to prepare statement");
+            let mut rows = stmt.query([chat_id.0]).expect("Failed to query chat row");
 
-            let (is_authorized, open_ai_api_key, system_prompt) = match rows.next()? {
+            let (is_authorized, open_ai_api_key, system_prompt) = match rows
+                .next()
+                .expect("Failed to fetch chat row")
+            {
                 Some(row) => {
-                    let is_authorized: bool = row.get(0)?;
-                    let open_ai_api_key: String = row.get(1)?;
-                    let system_prompt: String = row.get(2)?;
+                    let is_authorized: bool = row.get(0).expect("Failed to fetch is_authorized");
+                    let open_ai_api_key: String =
+                        row.get(1).expect("Failed to fetch open_ai_api_key");
+                    let system_prompt: String = row.get(2).expect("Failed to fetch system_prompt");
                     (is_authorized, open_ai_api_key, system_prompt)
                 }
                 None => {
                     let r = conn.execute(
-                    "INSERT INTO chats (chat_id, is_authorized, open_ai_api_key, system_prompt) \
-                     VALUES (?1, ?2, ?3, ?4)",
+                    "INSERT INTO chats (chat_id, is_authorized, open_ai_api_key, system_prompt) VALUES (?1, ?2, ?3, ?4)",
                     rusqlite::params![chat_id.0, false, "", ""],
-                )?;
+                ).expect("Failed to insert chat row");
+
                     if r != 1 {
                         let error = format!("failed to insert chat row for chat_id {}", chat_id.0);
                         log::error!("{}", error);
@@ -118,7 +124,7 @@ pub async fn load_conversation(
                 }
             };
 
-            if rows.next()?.is_some() {
+            if rows.next().expect("Failed to fetch next row").is_some() {
                 panic!("multiple chat rows found for chat_id {}", chat_id.0);
             }
 
@@ -142,38 +148,41 @@ pub async fn load_conversation(
             }
         };
 
-        let history = {
-            // Fetch latest messages first so we can stop once the token budget is exceeded,
-            // then restore chronological order for conversation reconstruction.
-            let mut stmt = conn.prepare(
+        let history =
+            {
+                // Fetch latest messages first so we can stop once the token budget is exceeded,
+                // then restore chronological order for conversation reconstruction.
+                let mut stmt = conn.prepare(
                 "SELECT tokens, role, text FROM history WHERE chat_id = ?1 ORDER BY id DESC",
-            )?;
+            ).expect("Failed to prepare statement");
 
-            let rows = stmt.query_map([chat_id.0], |row| {
-                let tokens: usize = row.get(0)?;
-                let role: u8 = row.get(1)?;
-                let text: String = row.get(2)?;
-                let role = MessageRole::try_from(role).expect("Invalid message role");
+                let rows = stmt
+                    .query_map([chat_id.0], |row| {
+                        let tokens: usize = row.get(0).expect("Failed to get tokens");
+                        let role: u8 = row.get(1).expect("Failed to get role");
+                        let text: String = row.get(2).expect("Failed to get text");
+                        let role = MessageRole::try_from(role).expect("Invalid message role");
 
-                Ok(conversation::Message { role, tokens, text })
-            })?;
+                        Ok(conversation::Message { role, tokens, text })
+                    })
+                    .expect("Failed to query history");
 
-            let mut history: Vec<conversation::Message> = Vec::new();
-            let mut total_tokens: usize = 0;
+                let mut history: Vec<conversation::Message> = Vec::new();
+                let mut total_tokens: usize = 0;
 
-            for row in rows {
-                if let Ok(message) = row {
-                    // Stop before adding a message that would push us over the budget.
-                    if total_tokens + message.tokens > max_tokens {
-                        break;
+                for row in rows {
+                    if let Ok(message) = row {
+                        // Stop before adding a message that would push us over the budget.
+                        if total_tokens + message.tokens > max_tokens {
+                            break;
+                        }
+                        total_tokens += message.tokens;
+                        history.push(message);
                     }
-                    total_tokens += message.tokens;
-                    history.push(message);
                 }
-            }
 
-            history
-        };
+                history
+            };
 
         (conversation, history)
     };
@@ -215,31 +224,28 @@ pub async fn load_conversation(
         conversation.prompt_tokens
     );
 
-    Ok(conversation)
+    conversation
 }
 
-pub async fn add_messages<'a, I>(
-    db: &Arc<Mutex<Connection>>,
-    chat_id: ChatId,
-    messages: I,
-) -> anyhow::Result<()>
+pub async fn add_messages<'a, I>(db: &Arc<Mutex<Connection>>, chat_id: ChatId, messages: I)
 where
     I: IntoIterator<Item = Message>,
 {
-    // Ensure both user and assistant messages are persisted atomically.
+    // Ensure all messages are persisted atomically.
     let mut conn = db.lock().await;
-    let tx = conn.transaction()?;
+    let tx = conn.transaction().expect("Failed to start transaction");
 
+    let mut msg_count = 0;
     for msg in messages {
         tx.execute(
             "INSERT INTO history (chat_id, tokens, role, text) VALUES (?1, ?2, ?3, ?4)",
             rusqlite::params![chat_id.0, msg.tokens as i64, msg.role as u8, msg.text],
-        )?;
+        )
+        .expect("Failed to insert message");
+        msg_count += 1;
     }
 
-    tx.commit()?;
+    tx.commit().expect("Failed to commit transaction");
 
-    log::info!("Added chat turn to conversation {}", chat_id);
-
-    Ok(())
+    log::info!("Added {} messages to conversation {}", msg_count, chat_id);
 }

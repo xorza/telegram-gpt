@@ -25,8 +25,7 @@ use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard};
 use typing::TypingIndicator;
 
 const DEFAULT_OPEN_AI_MODEL: &str = "gpt-4.1";
-const TELEGRAM_MAX_MESSAGE_LENGTH: usize = 4096;
-const STREAM_RESPONSE: bool = true;
+const STREAM_RESPONSE: bool = false;
 
 #[derive(Clone)]
 struct App {
@@ -40,8 +39,8 @@ struct App {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let app = init().await?;
+async fn main() {
+    let app = init().await;
 
     teloxide::repl(app.bot.clone(), move |_bot: Bot, msg: Message| {
         let app = app.clone();
@@ -56,15 +55,14 @@ async fn main() -> anyhow::Result<()> {
         }
     })
     .await;
-
-    Ok(())
 }
 
-async fn init() -> anyhow::Result<App, anyhow::Error> {
+async fn init() -> App {
     dotenv::dotenv().ok();
 
     // Log to rotating files capped at 10MB each, keeping the 3 newest, while also duplicating info logs to stdout.
-    Logger::try_with_env_or_str("info")?
+    Logger::try_with_env_or_str("info")
+        .expect("Failed to initialize logger")
         .log_to_file(FileSpec::default().directory("logs"))
         .rotate(
             Criterion::Size(10 * 1024 * 1024),
@@ -72,7 +70,8 @@ async fn init() -> anyhow::Result<App, anyhow::Error> {
             Cleanup::KeepLogFiles(3),
         )
         .duplicate_to_stdout(Duplicate::All)
-        .start()?;
+        .start()
+        .expect("Failed to start logger");
 
     let bot = Bot::from_env();
     let http_client = Arc::new(reqwest::Client::new());
@@ -82,14 +81,14 @@ async fn init() -> anyhow::Result<App, anyhow::Error> {
 
     let max_prompt_tokens = openai_api::context_length(&model);
 
-    let db = Arc::new(Mutex::new(db::init_db()?));
+    let db = Arc::new(Mutex::new(db::init_db()));
 
     let conversations: Arc<Mutex<HashMap<ChatId, Conversation>>> =
         Arc::new(Mutex::new(HashMap::new()));
 
     log::info!("starting tggpt bot with model: {model}, max prompt tokens: {max_prompt_tokens}");
 
-    Ok(App {
+    App {
         bot,
         http_client,
         model,
@@ -97,7 +96,7 @@ async fn init() -> anyhow::Result<App, anyhow::Error> {
         max_prompt_tokens,
         conversations,
         db,
-    })
+    }
 }
 
 impl App {
@@ -119,7 +118,7 @@ impl App {
 
         log::info!("received message from chat {chat_id}");
 
-        let mut conversation = self.get_conversation(chat_id).await?;
+        let mut conversation = self.get_conversation(chat_id).await;
         if !conversation.is_authorized {
             log::warn!("Unauthorized user {}", chat_id);
 
@@ -148,23 +147,7 @@ impl App {
 
         drop(conversation);
 
-        let on_stream_delta = {
-            let bot = self.bot.clone();
-            let stream_buffer = Arc::new(tokio::sync::Mutex::new(String::new()));
-
-            move |delta: String, finalize| {
-                handle_stream_delta(bot.clone(), chat_id, stream_buffer.clone(), delta, finalize)
-            }
-        };
-
-        let llm_result = openai_api::send(
-            &self.http_client,
-            &openai_api_key,
-            payload,
-            STREAM_RESPONSE,
-            on_stream_delta,
-        )
-        .await;
+        let llm_result = openai_api::send(&self.http_client, &openai_api_key, payload).await;
 
         drop(typing_indicator);
 
@@ -177,9 +160,9 @@ impl App {
                 );
                 let messages = [user_message, assistant_message];
                 self.get_conversation(chat_id)
-                    .await?
+                    .await
                     .add_messages(messages.iter().cloned());
-                db::add_messages(&self.db, chat_id, messages.into_iter()).await?;
+                db::add_messages(&self.db, chat_id, messages.into_iter()).await;
             }
             Err(err) => {
                 log::error!("failed to get llm response: {err}");
@@ -196,22 +179,19 @@ impl App {
         Ok(())
     }
 
-    async fn get_conversation(
-        &self,
-        chat_id: ChatId,
-    ) -> anyhow::Result<MappedMutexGuard<'_, Conversation>> {
+    async fn get_conversation(&self, chat_id: ChatId) -> MappedMutexGuard<'_, Conversation> {
         let mut conv_map = self.conversations.lock().await;
 
         if !conv_map.contains_key(&chat_id) {
             let conv =
                 db::load_conversation(&self.db, chat_id, &self.tokenizer, self.max_prompt_tokens)
-                    .await?;
+                    .await;
             conv_map.insert(chat_id, conv);
         }
 
-        Ok(MutexGuard::map(conv_map, |map| {
+        MutexGuard::map(conv_map, |map| {
             map.get_mut(&chat_id).expect("conversation must exist")
-        }))
+        })
     }
 }
 
@@ -226,52 +206,4 @@ impl Debug for App {
             .field("conversations", &self.conversations)
             .finish()
     }
-}
-
-async fn handle_stream_delta(
-    bot: Bot,
-    chat_id: ChatId,
-    stream_buffer: Arc<tokio::sync::Mutex<String>>,
-    delta: String,
-    finalize: bool,
-) -> anyhow::Result<()> {
-    // Accumulate incoming delta into the shared buffer.
-    let mut buf = stream_buffer.lock().await;
-    buf.push_str(&delta);
-
-    // Remove and return the first `max_chars` characters, preserving UTF-8 boundaries.
-    fn take_prefix(buf: &mut String, max_chars: usize) -> String {
-        let mut char_idx = 0usize;
-        let mut byte_split = buf.len();
-        for (i, _) in buf.char_indices() {
-            if char_idx == max_chars {
-                byte_split = i;
-                break;
-            }
-            char_idx += 1;
-        }
-        if byte_split == buf.len() {
-            return std::mem::take(buf);
-        }
-        let tail = buf.split_off(byte_split);
-        std::mem::replace(buf, tail)
-    }
-
-    // Send full Telegram-sized chunks as soon as they accumulate.
-    while buf.chars().count() >= TELEGRAM_MAX_MESSAGE_LENGTH {
-        let chunk = take_prefix(&mut buf, TELEGRAM_MAX_MESSAGE_LENGTH);
-        let to_send = chunk.clone();
-        drop(buf);
-        bot.send_message(chat_id, to_send).await?;
-        buf = stream_buffer.lock().await;
-    }
-
-    // On final signal, flush any remainder.
-    if finalize && !buf.is_empty() {
-        let to_send = std::mem::take(&mut *buf);
-        drop(buf);
-        bot.send_message(chat_id, to_send).await?;
-    }
-
-    Ok(())
 }
