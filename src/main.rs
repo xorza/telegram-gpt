@@ -130,10 +130,7 @@ impl App {
     async fn process_message(&self, msg: Message) -> anyhow::Result<()> {
         if msg.text().is_none() {
             self.bot
-                .send_message(
-                    msg.chat.id,
-                    "Please send text messages so I can ask the language model.",
-                )
+                .send_message(msg.chat.id, "Only text messages are supported.")
                 .await?;
 
             return Ok(());
@@ -171,7 +168,7 @@ impl App {
             .into_iter()
             .chain(conversation.history.iter())
             .chain(std::iter::once(&user_message));
-        
+
         let payload = openai_api::prepare_payload(&self.model, history);
         let openai_api_key = conversation.openai_api_key.clone();
 
@@ -181,34 +178,32 @@ impl App {
 
         drop(typing_indicator);
 
-        {
-            match llm_result {
-                Ok(assistant_text) => {
-                    for chunk in split_message(&assistant_text) {
-                        self.bot.send_message(chat_id, chunk).await?;
-                    }
-
-                    let assistant_message = conversation::Message::with_text(
-                        MessageRole::Assistant,
-                        assistant_text,
-                        &self.tokenizer,
-                    );
-                    let messages = [user_message, assistant_message];
-                    self.get_conversation(chat_id)
-                        .await?
-                        .add_messages(messages.iter().cloned());
-                    db::add_messages(&self.db, chat_id, messages.into_iter()).await?;
+        match llm_result {
+            Ok(assistant_text) => {
+                for chunk in split_message(&assistant_text) {
+                    self.bot.send_message(chat_id, chunk).await?;
                 }
-                Err(err) => {
-                    log::error!("failed to get llm response: {err}");
 
-                    self.bot
-                        .set_message_reaction(chat_id, msg.id)
-                        .reaction(vec![ReactionType::Emoji {
-                            emoji: "🖕".to_string(),
-                        }])
-                        .await?;
-                }
+                let assistant_message = conversation::Message::with_text(
+                    MessageRole::Assistant,
+                    assistant_text,
+                    &self.tokenizer,
+                );
+                let messages = [user_message, assistant_message];
+                self.get_conversation(chat_id)
+                    .await?
+                    .add_messages(messages.iter().cloned());
+                db::add_messages(&self.db, chat_id, messages.into_iter()).await?;
+            }
+            Err(err) => {
+                log::error!("failed to get llm response: {err}");
+
+                self.bot
+                    .set_message_reaction(chat_id, msg.id)
+                    .reaction(vec![ReactionType::Emoji {
+                        emoji: "🖕".to_string(),
+                    }])
+                    .await?;
             }
         }
 
