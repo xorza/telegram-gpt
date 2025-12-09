@@ -7,6 +7,7 @@ mod typing;
 
 use anyhow::{Context, anyhow};
 use conversation::{Conversation, MessageRole, TokenCounter};
+use diesel::dsl::Find;
 use flexi_logger::{Cleanup, Criterion, Duplicate, FileSpec, Logger, Naming};
 use reqwest::header::PROXY_AUTHENTICATE;
 use rusqlite::Connection;
@@ -27,7 +28,7 @@ type DynError = Box<dyn std::error::Error + Send + Sync>;
 
 const DEFAULT_OPEN_AI_MODEL: &str = "gpt-4.1";
 const TELEGRAM_MAX_MESSAGE_LENGTH: usize = 4096;
-const STREAM_RESPONSE: bool = true;
+const STREAM_RESPONSE: bool = false;
 
 #[derive(Clone)]
 struct App {
@@ -72,7 +73,7 @@ async fn init() -> anyhow::Result<App, anyhow::Error> {
             Naming::Numbers,
             Cleanup::KeepLogFiles(3),
         )
-        .duplicate_to_stdout(Duplicate::Debug)
+        .duplicate_to_stdout(Duplicate::All)
         .start()?;
 
     let bot = Bot::from_env();
@@ -160,7 +161,15 @@ impl App {
                 let bot = self.bot.clone();
                 let stream_buffer = stream_buffer.clone();
 
-                move |delta| handle_stream_delta(bot.clone(), chat_id, stream_buffer.clone(), delta)
+                move |delta, finalize| {
+                    handle_stream_delta(
+                        bot.clone(),
+                        chat_id,
+                        stream_buffer.clone(),
+                        delta,
+                        finalize,
+                    )
+                }
             },
         )
         .await;
@@ -237,6 +246,7 @@ async fn handle_stream_delta(
     chat_id: ChatId,
     stream_buffer: Arc<tokio::sync::Mutex<String>>,
     delta: String,
+    finalize: bool,
 ) -> anyhow::Result<()> {
     let mut buf = stream_buffer.lock().await;
     buf.push_str(&delta);
@@ -264,6 +274,12 @@ async fn handle_stream_delta(
         drop(buf);
         bot.send_message(chat_id, to_send).await?;
         buf = stream_buffer.lock().await;
+    }
+
+    if finalize && !buf.is_empty() {
+        let to_send = std::mem::take(&mut *buf);
+        drop(buf);
+        bot.send_message(chat_id, to_send).await?;
     }
 
     Ok(())

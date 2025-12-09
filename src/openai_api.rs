@@ -58,7 +58,7 @@ pub async fn send<F, Fut>(
     mut on_delta: F,
 ) -> anyhow::Result<String, DynError>
 where
-    F: FnMut(String) -> Fut,
+    F: FnMut(String, bool) -> Fut,
     Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
 {
     let response = http
@@ -81,7 +81,7 @@ where
         let trimmed = text.trim();
         if !trimmed.is_empty() {
             let owned = trimmed.to_string();
-            on_delta(owned.clone()).await?;
+            on_delta(owned.clone(), true).await?;
             return Ok(owned);
         }
     }
