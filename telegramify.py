@@ -1,31 +1,33 @@
 import asyncio
-import pathlib
+import sys
 
 import telegramify_markdown
-from telegramify_markdown.interpreters import (
-    InterpreterChain,
-    TextInterpreter,
-)
+from telegramify_markdown.interpreters import InterpreterChain, TextInterpreter
 from telegramify_markdown.type import ContentTypes
 
-md = pathlib.Path(__file__).parent.joinpath("t_longtext.md").read_text(encoding="utf-8")
 
+async def main():
+    # Read entire stdin as the markdown source.
+    md = sys.stdin.read()
 
-async def send_message():
     interpreter_chain = InterpreterChain([TextInterpreter()])
 
-    boxs = await telegramify_markdown.telegramify(
+    boxes = await telegramify_markdown.telegramify(
         content=md,
         interpreters_use=interpreter_chain,
         latex_escape=True,
         normalize_whitespace=True,
         max_word_count=4090,
     )
-    for item in boxs:
+
+    for item in boxes:
         if item.content_type == ContentTypes.TEXT:
-            print(item.content)
+            # Write each text block as UTF-8 bytes, followed by a NUL separator.
+            sys.stdout.buffer.write(item.content.encode("utf-8"))
+            sys.stdout.buffer.write(b"\0")
+
+    sys.stdout.flush()
 
 
 if __name__ == "__main__":
-    loop = asyncio.new_event_loop()
-    loop.run_until_complete(send_message())
+    asyncio.run(main())
