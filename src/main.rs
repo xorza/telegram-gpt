@@ -165,15 +165,14 @@ impl App {
             self.max_prompt_tokens - system_prompt_tokens - user_message.tokens,
         );
 
-        let payload = openai_api::prepare_payload(
-            &self.model,
-            conversation
-                .system_prompt
-                .as_ref()
-                .into_iter()
-                .chain(conversation.history.iter())
-                .chain(std::iter::once(&user_message)),
-        );
+        let history = conversation
+            .system_prompt
+            .as_ref()
+            .into_iter()
+            .chain(conversation.history.iter())
+            .chain(std::iter::once(&user_message));
+        
+        let payload = openai_api::prepare_payload(&self.model, history);
         let openai_api_key = conversation.openai_api_key.clone();
 
         drop(conversation);
