@@ -17,7 +17,8 @@ use std::fmt::Debug;
 use std::process::Stdio;
 use std::{collections::HashMap, path::Path, sync::Arc};
 use teloxide::RequestError;
-use teloxide::types::CopyTextButton;
+use teloxide::types::{CopyTextButton, ParseMode};
+use teloxide::utils::markdown::blockquote;
 use teloxide::{
     prelude::*,
     types::{ChatId, MessageId, ReactionType},
@@ -182,9 +183,11 @@ impl App {
         assistant_text: String,
         user_message: conversation::Message,
     ) -> anyhow::Result<()> {
+        let blocks = self.postprocess(assistant_text).await;
+
         let assistant_message = conversation::Message::with_text(
             MessageRole::Assistant,
-            assistant_text.clone(),
+            blocks.join("\n"),
             &self.tokenizer,
         );
         let messages = [user_message, assistant_message];
@@ -193,9 +196,11 @@ impl App {
             .add_messages(messages.iter().cloned());
         db::add_messages(&self.db, chat_id, messages.into_iter()).await;
 
-        let blocks = self.postprocess(assistant_text).await;
         for block in blocks {
-            self.bot.send_message(chat_id, block).await?;
+            self.bot
+                .send_message(chat_id, block)
+                .parse_mode(ParseMode::MarkdownV2)
+                .await?;
         }
 
         Ok(())
@@ -219,6 +224,7 @@ impl App {
             .shutdown()
             .await
             .expect("failed to close telegramify stdin");
+        drop(stdin);
 
         let mut stdout_buf = Vec::new();
         let mut stdout = child.stdout.take().expect("Failed to take stdout");
