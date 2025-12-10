@@ -217,11 +217,13 @@ impl App {
         .await
         .expect("postprocess timed out");
 
-        let assistant_message = conversation::Message::with_text(
-            MessageRole::Assistant,
-            blocks.join("\n"),
-            &self.tokenizer,
-        );
+        let assistant_message = conversation::Message {
+            role: MessageRole::Assistant,
+            text: blocks.join("\n"),
+            tokens: self.tokenizer.count_text(&blocks.join("\n")),
+            raw_text: assistant_text,
+        };
+
         let messages = [user_message, assistant_message];
         self.get_conversation(chat_id)
             .await

@@ -17,6 +17,7 @@ pub struct Message {
     pub role: MessageRole,
     pub tokens: usize,
     pub text: String,
+    pub raw_text: String,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -61,7 +62,12 @@ impl Message {
     pub fn with_text(role: MessageRole, text: String, tokenizer: &TokenCounter) -> Self {
         let tokens = tokenizer.count_text(&text);
 
-        Self { role, text, tokens }
+        Self {
+            role,
+            text,
+            tokens,
+            raw_text: String::new(),
+        }
     }
 }
 

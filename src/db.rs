@@ -163,7 +163,12 @@ pub async fn load_conversation(
                         let text: String = row.get(2).expect("Failed to get text");
                         let role = MessageRole::try_from(role).expect("Invalid message role");
 
-                        Ok(conversation::Message { role, tokens, text })
+                        Ok(conversation::Message {
+                            role,
+                            tokens,
+                            text,
+                            raw_text: String::new(),
+                        })
                     })
                     .expect("Failed to query history");
 
