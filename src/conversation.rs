@@ -14,6 +14,7 @@ pub struct Conversation {
 
 #[derive(Debug, Clone, Default)]
 pub struct Message {
+    pub id: u64,
     pub role: MessageRole,
     pub tokens: usize,
     pub text: String,
@@ -43,8 +44,10 @@ impl Conversation {
     where
         I: IntoIterator<Item = Message>,
     {
-        for message in messages {
+        for mut message in messages {
             self.prompt_tokens += message.tokens;
+            // dont need raw_text in history
+            message.raw_text = String::new();
             self.history.push_back(message);
         }
     }
@@ -54,19 +57,6 @@ impl Conversation {
             if let Some(removed) = self.history.pop_front() {
                 self.prompt_tokens = self.prompt_tokens.saturating_sub(removed.tokens);
             }
-        }
-    }
-}
-
-impl Message {
-    pub fn with_text(role: MessageRole, text: String, tokenizer: &TokenCounter) -> Self {
-        let tokens = tokenizer.count_text(&text);
-
-        Self {
-            role,
-            text,
-            tokens,
-            raw_text: String::new(),
         }
     }
 }

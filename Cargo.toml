@@ -16,5 +16,5 @@ serde_json = "1.0"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 anyhow = "1.0"
 rusqlite = { version = "0.37", features = ["bundled"] }
-diesel = { version = "2.3", features = ["sqlite"] }
 futures-util = "0.3"
+md2tgmdv2 = { git = "https://github.com/xorza/md2tgmdv2.git", branch = "master" }

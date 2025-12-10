@@ -7,7 +7,6 @@ mod typing;
 
 use anyhow::{Context, anyhow};
 use conversation::{Conversation, MessageRole, TokenCounter};
-use diesel::dsl::Find;
 use flexi_logger::{Cleanup, Criterion, Duplicate, FileSpec, Logger, Naming};
 use log::error;
 use reqwest::header::PROXY_AUTHENTICATE;
@@ -144,8 +143,13 @@ impl App {
 
         let chat_id = msg.chat.id;
         let user_text = msg.text().unwrap().to_owned();
-        let user_message =
-            conversation::Message::with_text(MessageRole::User, user_text, &self.tokenizer);
+        let user_message = conversation::Message {
+            id: 0,
+            role: MessageRole::User,
+            tokens: self.tokenizer.count_text(&user_text),
+            text: user_text.clone(),
+            raw_text: String::new(),
+        };
 
         let typing_indicator = TypingIndicator::new(self.bot.clone(), chat_id);
 
@@ -218,6 +222,7 @@ impl App {
         .expect("postprocess timed out");
 
         let assistant_message = conversation::Message {
+            id: 0,
             role: MessageRole::Assistant,
             text: blocks.join("\n"),
             tokens: self.tokenizer.count_text(&blocks.join("\n")),

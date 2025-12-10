@@ -137,11 +137,13 @@ pub async fn load_conversation(
             }
 
             let system_prompt = if !system_prompt.is_empty() {
-                Some(conversation::Message::with_text(
-                    MessageRole::System,
-                    system_prompt,
-                    tokenizer,
-                ))
+                Some(conversation::Message {
+                    id: 0,
+                    role: MessageRole::System,
+                    tokens: tokenizer.count_text(&system_prompt),
+                    text: system_prompt,
+                    raw_text: String::new(),
+                })
             } else {
                 None
             };
@@ -172,6 +174,7 @@ pub async fn load_conversation(
                         let role = MessageRole::try_from(role).expect("Invalid message role");
 
                         Ok(conversation::Message {
+                            id: 0,
                             role,
                             tokens,
                             text,
