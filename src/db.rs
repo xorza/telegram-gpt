@@ -251,8 +251,14 @@ where
     let mut msg_count = 0;
     for msg in messages {
         tx.execute(
-            "INSERT INTO history (chat_id, tokens, role, text) VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![chat_id.0, msg.tokens as i64, msg.role as u8, msg.text],
+            "INSERT INTO history (chat_id, tokens, role, text, raw_text) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                chat_id.0,
+                msg.tokens as i64,
+                msg.role as u8,
+                msg.text,
+                msg.raw_text
+            ],
         )
         .expect("Failed to insert message");
         msg_count += 1;
