@@ -5,7 +5,7 @@ use std::sync::Arc;
 use teloxide::types::ChatId;
 use tokio::sync::Mutex;
 
-const SCHEMA_VERSION: i32 = 1;
+const SCHEMA_VERSION: i32 = 2;
 
 pub fn init_db() -> Connection {
     let db_path = std::env::var("SQLITE_PATH").unwrap_or_else(|_| "data/db.sqlite".to_string());
@@ -28,17 +28,24 @@ pub fn init_db() -> Connection {
 
     // Initialize database schema if needed and validate version.
     let version = get_schema_version(&conn);
-    if version == 0 {
-        init_schema(&conn);
-        set_schema_version(&conn, SCHEMA_VERSION);
-        log::info!("Initialized database schema version {}", SCHEMA_VERSION);
-    } else if version != SCHEMA_VERSION {
-        panic!(
+    match version {
+        0 => {
+            init_schema(&conn);
+            set_schema_version(&conn, SCHEMA_VERSION);
+            log::info!("Initialized database schema version {}", SCHEMA_VERSION);
+        }
+        1 => {
+            // Migrate from version 1 to version 2
+            conn.execute("ALTER TABLE history ADD COLUMN raw_text TEXT NULL", [])
+                .expect("Failed to add raw_text column");
+            set_schema_version(&conn, SCHEMA_VERSION);
+            log::info!("Migrated database schema from version 1 to version 2");
+        }
+        2 => log::info!("Database schema version {} detected", version),
+        _ => panic!(
             "Unsupported database schema version {} (expected {})",
             version, SCHEMA_VERSION
-        );
-    } else {
-        log::info!("Database schema version {} detected", version);
+        ),
     }
 
     conn
@@ -51,7 +58,8 @@ fn init_schema(conn: &Connection) {
             chat_id INTEGER NOT NULL,
             tokens  INTEGER NOT NULL,
             role    INTEGER NOT NULL,
-            text    TEXT NOT NULL
+            text    TEXT NOT NULL,
+            raw_text TEXT NULL
         )",
         [],
     )
