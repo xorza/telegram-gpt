@@ -14,11 +14,11 @@ pub struct Conversation {
 
 #[derive(Debug, Clone, Default)]
 pub struct Message {
-    pub id: u64,
     pub role: MessageRole,
     pub tokens: usize,
     pub text: String,
     pub raw_text: String,
+    pub send_failed: bool,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]

@@ -38,6 +38,11 @@ pub fn init_db() -> Connection {
             // Migrate from version 1 to version 2
             conn.execute("ALTER TABLE history ADD COLUMN raw_text TEXT NULL", [])
                 .expect("Failed to add raw_text column");
+            conn.execute(
+                "ALTER TABLE history ADD COLUMN send_failed BOOLEAN NOT NULL DEFAULT 0",
+                [],
+            )
+            .expect("Failed to add send_failed column");
             set_schema_version(&conn, SCHEMA_VERSION);
             log::info!("Migrated database schema from version 1 to version 2");
         }
@@ -59,7 +64,8 @@ fn init_schema(conn: &Connection) {
             tokens  INTEGER NOT NULL,
             role    INTEGER NOT NULL,
             text    TEXT NOT NULL,
-            raw_text TEXT NULL
+            raw_text TEXT NULL,
+            send_failed BOOLEAN NOT NULL DEFAULT 0
         )",
         [],
     )
@@ -138,11 +144,10 @@ pub async fn load_conversation(
 
             let system_prompt = if !system_prompt.is_empty() {
                 Some(conversation::Message {
-                    id: 0,
                     role: MessageRole::System,
                     tokens: tokenizer.count_text(&system_prompt),
                     text: system_prompt,
-                    raw_text: String::new(),
+                    ..Default::default()
                 })
             } else {
                 None
@@ -174,11 +179,10 @@ pub async fn load_conversation(
                         let role = MessageRole::try_from(role).expect("Invalid message role");
 
                         Ok(conversation::Message {
-                            id: 0,
                             role,
                             tokens,
                             text,
-                            raw_text: String::new(),
+                            ..Default::default()
                         })
                     })
                     .expect("Failed to query history");
@@ -254,13 +258,14 @@ where
     let mut msg_count = 0;
     for msg in messages {
         tx.execute(
-            "INSERT INTO history (chat_id, tokens, role, text, raw_text) VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO history (chat_id, tokens, role, text, raw_text, send_failed) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![
                 chat_id.0,
                 msg.tokens as i64,
                 msg.role as u8,
                 msg.text,
-                msg.raw_text
+                msg.raw_text,
+                msg.send_failed
             ],
         )
         .expect("Failed to insert message");

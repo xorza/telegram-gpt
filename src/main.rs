@@ -144,11 +144,10 @@ impl App {
         let chat_id = msg.chat.id;
         let user_text = msg.text().unwrap().to_owned();
         let user_message = conversation::Message {
-            id: 0,
             role: MessageRole::User,
             tokens: self.tokenizer.count_text(&user_text),
             text: user_text.clone(),
-            raw_text: String::new(),
+            ..Default::default()
         };
 
         let typing_indicator = TypingIndicator::new(self.bot.clone(), chat_id);
@@ -189,8 +188,8 @@ impl App {
         drop(typing_indicator);
 
         match llm_result {
-            Ok(assistant_text) => {
-                self.process_llm_response(chat_id, assistant_text, user_message)
+            Ok(llm_text) => {
+                self.process_llm_response(chat_id, llm_text, user_message)
                     .await?;
             }
             Err(err) => {
@@ -211,22 +210,27 @@ impl App {
     async fn process_llm_response(
         &self,
         chat_id: ChatId,
-        assistant_text: String,
+        llm_text: String,
         user_message: conversation::Message,
     ) -> anyhow::Result<()> {
-        let blocks = tokio::time::timeout(
+        let postprocessed_blocks = tokio::time::timeout(
             std::time::Duration::from_secs(1),
-            self.postprocess(assistant_text.clone()),
+            self.postprocess(llm_text.clone()),
         )
         .await
         .expect("postprocess timed out");
+        let postprocessed_text = postprocessed_blocks.join("\n");
+
+        let send_result = self
+            .send_response_to_bot(chat_id, postprocessed_blocks)
+            .await;
 
         let assistant_message = conversation::Message {
-            id: 0,
             role: MessageRole::Assistant,
-            text: blocks.join("\n"),
-            tokens: self.tokenizer.count_text(&blocks.join("\n")),
-            raw_text: assistant_text,
+            tokens: self.tokenizer.count_text(&postprocessed_text),
+            text: postprocessed_text,
+            raw_text: llm_text,
+            send_failed: send_result.is_err(),
         };
 
         let messages = [user_message, assistant_message];
@@ -235,6 +239,14 @@ impl App {
             .add_messages(messages.iter().cloned());
         db::add_messages(&self.db, chat_id, messages.into_iter()).await;
 
+        send_result
+    }
+
+    async fn send_response_to_bot(
+        &self,
+        chat_id: ChatId,
+        blocks: Vec<String>,
+    ) -> anyhow::Result<()> {
         for block in blocks {
             self.bot
                 .send_message(chat_id, block)
