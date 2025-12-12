@@ -992,7 +992,7 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 [[package]]
 name = "md2tgmdv2"
 version = "0.1.0"
-source = "git+https://github.com/xorza/md2tgmdv2.git?branch=master#9244421a10c4a6f4d4f2ad13bc6bf3f0d354d3bf"
+source = "git+https://github.com/xorza/md2tgmdv2.git?branch=master#450cf6bee033449dda4570721624628f38dca440"
 dependencies = [
  "anyhow",
  "pulldown-cmark",
