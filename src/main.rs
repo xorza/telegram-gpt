@@ -78,8 +78,6 @@ async fn init() -> App {
         .start()
         .expect("Failed to start logger");
 
-    verify_python3().await;
-
     let bot = Bot::from_env();
     let http_client = Arc::new(reqwest::Client::new());
     let model =
@@ -104,31 +102,6 @@ async fn init() -> App {
         conversations,
         db,
     }
-}
-
-async fn verify_python3() {
-    // Ensure python3 and telegramify_markdown are available for markdown postprocessing.
-    let probe = Command::new("python3")
-        .args(["-c", "import telegramify_markdown; print('ok')"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .expect("failed to invoke python3 for dependency check");
-
-    let probe_ok = probe.status.success() && String::from_utf8_lossy(&probe.stdout).trim() == "ok";
-
-    if !probe_ok {
-        let error = format!(
-            "python3 with telegramify_markdown is required to run telegramify.py.\nstdout: {}\nstderr: {}",
-            String::from_utf8_lossy(&probe.stdout),
-            String::from_utf8_lossy(&probe.stderr)
-        );
-        log::error!("{}", error);
-        panic!("{}", error);
-    }
-
-    log::info!("python3 with telegramify_markdown is available");
 }
 
 impl App {
@@ -213,17 +186,24 @@ impl App {
         llm_text: String,
         user_message: conversation::Message,
     ) -> anyhow::Result<()> {
-        let postprocessed_blocks = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            self.postprocess(llm_text.clone()),
-        )
-        .await
-        .expect("postprocess timed out");
-        let postprocessed_text = postprocessed_blocks.join("\n");
+        let postprocessed_result = self.postprocess(llm_text.clone());
 
-        let send_result = self
-            .send_response_to_bot(chat_id, postprocessed_blocks)
-            .await;
+        let (postprocessed_text, send_result) = match postprocessed_result {
+            Ok(postprocessed_blocks) => {
+                let postprocessed_text = postprocessed_blocks.join("\n");
+                let send_result = self
+                    .send_response_to_bot(chat_id, postprocessed_blocks)
+                    .await;
+
+                (postprocessed_text, send_result)
+            }
+            Err(error) => {
+                let error = format!("Failed to postprocess LLM response: {:?}", error);
+                log::error!("{}", error);
+
+                ("".to_string(), Err(anyhow!(error)))
+            }
+        };
 
         let assistant_message = conversation::Message {
             role: MessageRole::Assistant,
@@ -232,7 +212,6 @@ impl App {
             raw_text: llm_text,
             send_failed: send_result.is_err(),
         };
-
         let messages = [user_message, assistant_message];
         self.get_conversation(chat_id)
             .await
@@ -257,54 +236,8 @@ impl App {
         Ok(())
     }
 
-    async fn postprocess(&self, assistant_text: String) -> Vec<String> {
-        let mut child = Command::new("python3")
-            .arg("telegramify.py")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("failed to spawn telegramify.py");
-
-        let mut stdin = child.stdin.take().expect("Failed to take stdin");
-        stdin
-            .write_all(assistant_text.as_bytes())
-            .await
-            .expect("failed to write to telegramify stdin");
-        stdin
-            .shutdown()
-            .await
-            .expect("failed to close telegramify stdin");
-        // drop is required here otherwise python script will never receive its input
-        drop(stdin);
-
-        let mut stdout_buf = Vec::new();
-        let mut stdout = child.stdout.take().expect("Failed to take stdout");
-        let _ = stdout
-            .read_to_end(&mut stdout_buf)
-            .await
-            .context("failed to read telegramify stdout");
-
-        let mut stderr_buf = Vec::new();
-        let mut stderr = child.stderr.take().expect("Failed to take stderr");
-        let _ = stderr
-            .read_to_end(&mut stderr_buf)
-            .await
-            .context("failed to read telegramify stderr");
-
-        let status = child.wait().await.context("failed to wait for telegramify");
-        if let Err(status) = status {
-            let err_txt = String::from_utf8_lossy(&stderr_buf);
-            let err_txt = format!("telegramify.py exited with {status}: {err_txt}");
-            log::error!("{}", err_txt);
-            panic!("{}", err_txt)
-        }
-
-        stdout_buf
-            .split(|b| *b == 0)
-            .filter(|b| !b.is_empty())
-            .map(|block| String::from_utf8_lossy(block).to_string())
-            .collect::<Vec<String>>()
+    fn postprocess(&self, assistant_text: String) -> anyhow::Result<Vec<String>> {
+        md2tgmdv2::Converter::default().go(&assistant_text)
     }
 
     async fn get_conversation(&self, chat_id: ChatId) -> MappedMutexGuard<'_, Conversation> {
