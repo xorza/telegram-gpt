@@ -1,5 +1,5 @@
 use crate::conversation::{self, Conversation, Message, MessageRole, TokenCounter};
-use anyhow::Result;
+use anyhow::{Context, Result, anyhow};
 use rusqlite::{Connection, Error as SqliteError};
 use std::sync::Arc;
 use teloxide::types::ChatId;
@@ -154,12 +154,13 @@ pub async fn load_conversation(
             };
 
             Conversation {
-                chat_id: chat_id.0 as u64,
+                chat_id: chat_id.0,
                 history: Default::default(),
                 prompt_tokens: 0,
                 is_authorized,
                 openai_api_key: open_ai_api_key,
                 system_prompt,
+                command: None,
             }
         };
 
@@ -275,4 +276,50 @@ where
     tx.commit().expect("Failed to commit transaction");
 
     log::info!("Added {} messages to conversation {}", msg_count, chat_id);
+}
+
+pub async fn update_token(db: &Arc<Mutex<Connection>>, chat_id: i64, token: String) -> Result<()> {
+    let conn = db.lock().await;
+    let updated = conn
+        .execute(
+            "UPDATE chats SET open_ai_api_key = ?1 WHERE chat_id = ?2",
+            rusqlite::params![token, chat_id],
+        )
+        .context("Failed to update token")?;
+
+    if updated != 1 {
+        return Err(anyhow!(
+            "Token update affected {} rows for chat_id {}",
+            updated,
+            chat_id
+        ));
+    }
+
+    log::info!("Updated OpenAI token for chat {}", chat_id);
+    Ok(())
+}
+
+pub async fn update_system_message(
+    db: &Arc<Mutex<Connection>>,
+    chat_id: i64,
+    system_message: String,
+) -> Result<()> {
+    let conn = db.lock().await;
+    let updated = conn
+        .execute(
+            "UPDATE chats SET system_prompt = ?1 WHERE chat_id = ?2",
+            rusqlite::params![system_message, chat_id],
+        )
+        .context("Failed to update system message")?;
+
+    if updated != 1 {
+        return Err(anyhow!(
+            "System message update affected {} rows for chat_id {}",
+            updated,
+            chat_id
+        ));
+    }
+
+    log::info!("Updated system prompt for chat {}", chat_id);
+    Ok(())
 }

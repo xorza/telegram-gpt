@@ -139,7 +139,8 @@ impl App {
         }
 
         if user_message.text.starts_with("/") || conversation.command.is_some() {
-            self.handle_command(&conversation, &user_message).await?;
+            self.handle_command(&mut conversation, &user_message)
+                .await?;
             return Ok(());
         }
 
@@ -186,17 +187,39 @@ impl App {
 
     async fn handle_command(
         &self,
-        conversation: &conversation::Conversation,
+        conversation: &mut conversation::Conversation,
         user_message: &conversation::Message,
     ) -> anyhow::Result<()> {
         match conversation.command {
             Some(conversation::Command::Token) => {
                 let token = user_message.text.trim().to_string();
-                db::update_token(conversation.chat_id, token).await?;
+                db::update_token(&self.db, conversation.chat_id, token.clone()).await?;
+                conversation.openai_api_key = token;
+                conversation.command = None;
+                self.bot
+                    .send_message(ChatId(conversation.chat_id), "Token updated.")
+                    .await?;
             }
             Some(conversation::Command::SystemMessage) => {
                 let system_message = user_message.text.trim().to_string();
-                db::update_system_message(conversation.chat_id, system_message).await?;
+                db::update_system_message(&self.db, conversation.chat_id, system_message.clone())
+                    .await?;
+
+                if system_message.is_empty() {
+                    conversation.system_prompt = None;
+                } else {
+                    conversation.system_prompt = Some(conversation::Message {
+                        role: MessageRole::System,
+                        tokens: self.tokenizer.count_text(&system_message),
+                        text: system_message,
+                        ..Default::default()
+                    });
+                }
+
+                conversation.command = None;
+                self.bot
+                    .send_message(ChatId(conversation.chat_id), "System message updated.")
+                    .await?;
             }
             None => {
                 if user_message.text.starts_with("/token") {
@@ -206,12 +229,15 @@ impl App {
                         .await?;
                 } else if user_message.text.starts_with("/system_message") {
                     conversation.command = Some(conversation::Command::SystemMessage);
-                    if let Some(current_system_prompt) = conversation.system_prompt {
+                    if let Some(current_system_prompt) = conversation.system_prompt.as_ref() {
                         self.bot
                             .send_message(ChatId(conversation.chat_id), "Current system message:")
                             .await?;
                         self.bot
-                            .send_message(ChatId(conversation.chat_id), current_system_prompt.text)
+                            .send_message(
+                                ChatId(conversation.chat_id),
+                                current_system_prompt.text.clone(),
+                            )
                             .await?;
                     }
                     self.bot
