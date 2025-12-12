@@ -4,12 +4,13 @@ use tiktoken_rs::{CoreBPE, get_bpe_from_model, o200k_base};
 
 #[derive(Debug)]
 pub struct Conversation {
-    pub chat_id: u64,
+    pub chat_id: i64,
     pub history: VecDeque<Message>,
     pub prompt_tokens: usize,
     pub is_authorized: bool,
     pub openai_api_key: String,
     pub system_prompt: Option<Message>,
+    pub command: Option<Command>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -27,6 +28,13 @@ pub enum MessageRole {
     System = 0,
     User = 1,
     Assistant = 2,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum Command {
+    Token = 0,
+    SystemMessage,
 }
 
 #[derive(Clone)]

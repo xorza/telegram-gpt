@@ -24,7 +24,6 @@ use teloxide::{
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    process::Command,
     sync::{MappedMutexGuard, Mutex, MutexGuard},
 };
 use typing::TypingIndicator;
@@ -119,7 +118,7 @@ impl App {
         let user_message = conversation::Message {
             role: MessageRole::User,
             tokens: self.tokenizer.count_text(&user_text),
-            text: user_text.clone(),
+            text: user_text,
             ..Default::default()
         };
 
@@ -136,6 +135,11 @@ impl App {
                 chat_id
             );
             self.bot.send_message(msg.chat.id, &message).await?;
+            return Ok(());
+        }
+
+        if user_message.text.starts_with("/") || conversation.command.is_some() {
+            self.handle_command(&conversation, &user_message).await?;
             return Ok(());
         }
 
@@ -174,6 +178,49 @@ impl App {
                         emoji: "🖕".to_string(),
                     }])
                     .await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn handle_command(
+        &self,
+        conversation: &conversation::Conversation,
+        user_message: &conversation::Message,
+    ) -> anyhow::Result<()> {
+        match conversation.command {
+            Some(conversation::Command::Token) => {
+                let token = user_message.text.trim().to_string();
+                db::update_token(conversation.chat_id, token).await?;
+            }
+            Some(conversation::Command::SystemMessage) => {
+                let system_message = user_message.text.trim().to_string();
+                db::update_system_message(conversation.chat_id, system_message).await?;
+            }
+            None => {
+                if user_message.text.starts_with("/token") {
+                    conversation.command = Some(conversation::Command::Token);
+                    self.bot
+                        .send_message(ChatId(conversation.chat_id), "Please enter your token:")
+                        .await?;
+                } else if user_message.text.starts_with("/system_message") {
+                    conversation.command = Some(conversation::Command::SystemMessage);
+                    if let Some(current_system_prompt) = conversation.system_prompt {
+                        self.bot
+                            .send_message(ChatId(conversation.chat_id), "Current system message:")
+                            .await?;
+                        self.bot
+                            .send_message(ChatId(conversation.chat_id), current_system_prompt.text)
+                            .await?;
+                    }
+                    self.bot
+                        .send_message(
+                            ChatId(conversation.chat_id),
+                            "Please enter your new system message:",
+                        )
+                        .await?;
+                }
             }
         }
 
