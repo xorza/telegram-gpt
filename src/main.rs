@@ -139,8 +139,10 @@ impl App {
         }
 
         if user_message.text.starts_with("/") || conversation.command.is_some() {
+            let current_command = conversation.command.clone();
             drop(conversation);
-            self.handle_command(chat_id, &user_message).await?;
+            self.handle_command(chat_id, &user_message, current_command)
+                .await?;
             return Ok(());
         }
 
@@ -189,13 +191,10 @@ impl App {
         &self,
         chat_id: ChatId,
         user_message: &conversation::Message,
+        current_command: Option<conversation::Command>,
     ) -> anyhow::Result<()> {
-        use conversation::Command;
-
-        let current_command = { self.get_conversation(chat_id).await.command };
-
         match current_command {
-            Some(Command::Token) => {
+            Some(conversation::Command::Token) => {
                 let token = user_message.text.trim().to_string();
 
                 db::update_token(&self.db, chat_id.0, token.clone()).await?;
@@ -208,7 +207,7 @@ impl App {
 
                 self.bot.send_message(chat_id, "Token updated.").await?;
             }
-            Some(Command::SystemMessage) => {
+            Some(conversation::Command::SystemMessage) => {
                 let system_message = user_message.text.trim().to_string();
 
                 db::update_system_message(&self.db, chat_id.0, system_message.clone()).await?;
@@ -236,7 +235,7 @@ impl App {
                 if user_message.text.starts_with("/token") {
                     {
                         let mut conversation = self.get_conversation(chat_id).await;
-                        conversation.command = Some(Command::Token);
+                        conversation.command = Some(conversation::Command::Token);
                     }
                     self.bot
                         .send_message(chat_id, "Please enter your token:")
@@ -245,7 +244,7 @@ impl App {
                     let current_prompt = {
                         let mut conversation = self.get_conversation(chat_id).await;
                         let prompt = conversation.system_prompt.clone();
-                        conversation.command = Some(Command::SystemMessage);
+                        conversation.command = Some(conversation::Command::SystemMessage);
                         prompt
                     };
 
