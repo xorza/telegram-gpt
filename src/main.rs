@@ -139,8 +139,8 @@ impl App {
         }
 
         if user_message.text.starts_with("/") || conversation.command.is_some() {
-            self.handle_command(&mut conversation, &user_message)
-                .await?;
+            drop(conversation);
+            self.handle_command(chat_id, &user_message).await?;
             return Ok(());
         }
 
@@ -187,64 +187,79 @@ impl App {
 
     async fn handle_command(
         &self,
-        conversation: &mut conversation::Conversation,
+        chat_id: ChatId,
         user_message: &conversation::Message,
     ) -> anyhow::Result<()> {
-        match conversation.command {
-            Some(conversation::Command::Token) => {
-                let token = user_message.text.trim().to_string();
-                db::update_token(&self.db, conversation.chat_id, token.clone()).await?;
-                conversation.openai_api_key = token;
-                conversation.command = None;
-                self.bot
-                    .send_message(ChatId(conversation.chat_id), "Token updated.")
-                    .await?;
-            }
-            Some(conversation::Command::SystemMessage) => {
-                let system_message = user_message.text.trim().to_string();
-                db::update_system_message(&self.db, conversation.chat_id, system_message.clone())
-                    .await?;
+        use conversation::Command;
 
-                if system_message.is_empty() {
-                    conversation.system_prompt = None;
-                } else {
-                    conversation.system_prompt = Some(conversation::Message {
-                        role: MessageRole::System,
-                        tokens: self.tokenizer.count_text(&system_message),
-                        text: system_message,
-                        ..Default::default()
-                    });
+        let current_command = { self.get_conversation(chat_id).await.command };
+
+        match current_command {
+            Some(Command::Token) => {
+                let token = user_message.text.trim().to_string();
+
+                db::update_token(&self.db, chat_id.0, token.clone()).await?;
+
+                {
+                    let mut conversation = self.get_conversation(chat_id).await;
+                    conversation.openai_api_key = token;
+                    conversation.command = None;
                 }
 
-                conversation.command = None;
+                self.bot.send_message(chat_id, "Token updated.").await?;
+            }
+            Some(Command::SystemMessage) => {
+                let system_message = user_message.text.trim().to_string();
+
+                db::update_system_message(&self.db, chat_id.0, system_message.clone()).await?;
+
+                {
+                    let mut conversation = self.get_conversation(chat_id).await;
+                    conversation.system_prompt = if system_message.is_empty() {
+                        None
+                    } else {
+                        Some(conversation::Message {
+                            role: MessageRole::System,
+                            tokens: self.tokenizer.count_text(&system_message),
+                            text: system_message,
+                            ..Default::default()
+                        })
+                    };
+                    conversation.command = None;
+                }
+
                 self.bot
-                    .send_message(ChatId(conversation.chat_id), "System message updated.")
+                    .send_message(chat_id, "System message updated.")
                     .await?;
             }
             None => {
                 if user_message.text.starts_with("/token") {
-                    conversation.command = Some(conversation::Command::Token);
-                    self.bot
-                        .send_message(ChatId(conversation.chat_id), "Please enter your token:")
-                        .await?;
-                } else if user_message.text.starts_with("/system_message") {
-                    conversation.command = Some(conversation::Command::SystemMessage);
-                    if let Some(current_system_prompt) = conversation.system_prompt.as_ref() {
-                        self.bot
-                            .send_message(ChatId(conversation.chat_id), "Current system message:")
-                            .await?;
-                        self.bot
-                            .send_message(
-                                ChatId(conversation.chat_id),
-                                current_system_prompt.text.clone(),
-                            )
-                            .await?;
+                    {
+                        let mut conversation = self.get_conversation(chat_id).await;
+                        conversation.command = Some(Command::Token);
                     }
                     self.bot
-                        .send_message(
-                            ChatId(conversation.chat_id),
-                            "Please enter your new system message:",
-                        )
+                        .send_message(chat_id, "Please enter your token:")
+                        .await?;
+                } else if user_message.text.starts_with("/system_message") {
+                    let current_prompt = {
+                        let mut conversation = self.get_conversation(chat_id).await;
+                        let prompt = conversation.system_prompt.clone();
+                        conversation.command = Some(Command::SystemMessage);
+                        prompt
+                    };
+
+                    if let Some(current_system_prompt) = current_prompt {
+                        self.bot
+                            .send_message(chat_id, "Current system message:")
+                            .await?;
+                        self.bot
+                            .send_message(chat_id, current_system_prompt.text)
+                            .await?;
+                    }
+
+                    self.bot
+                        .send_message(chat_id, "Please enter your new system message:")
                         .await?;
                 }
             }
