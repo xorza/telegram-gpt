@@ -252,21 +252,31 @@ async fn handle_stream_delta(
     let mut buf = stream_buffer.lock().await;
     buf.push_str(&delta);
 
-    // Remove and return the first `max_chars` characters, preserving UTF-8 boundaries.
+    // Remove and return up to `max_chars` characters, preferring to split on whitespace.
     fn take_prefix(buf: &mut String, max_chars: usize) -> String {
-        let mut char_idx = 0usize;
+        let mut last_whitespace = None;
         let mut byte_split = buf.len();
-        for (i, _) in buf.char_indices() {
+        let mut char_idx = 0usize;
+
+        for (i, ch) in buf.char_indices() {
             if char_idx == max_chars {
                 byte_split = i;
                 break;
             }
+            if ch.is_whitespace() {
+                last_whitespace = Some(i);
+            }
             char_idx += 1;
         }
+
+        // Buffer shorter than max_chars — take it all.
         if byte_split == buf.len() {
             return std::mem::take(buf);
         }
-        let tail = buf.split_off(byte_split);
+
+        // Prefer splitting on the last whitespace before the limit (unless it would be empty).
+        let split_at = last_whitespace.filter(|idx| *idx > 0).unwrap_or(byte_split);
+        let tail = buf.split_off(split_at);
         std::mem::replace(buf, tail)
     }
 
