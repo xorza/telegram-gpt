@@ -111,16 +111,16 @@ async fn init() -> anyhow::Result<App, anyhow::Error> {
 
 impl App {
     async fn process_message(&self, msg: Message) -> anyhow::Result<()> {
-        if msg.text().is_none() {
-            self.bot
-                .send_message(msg.chat.id, "Only text messages are supported.")
-                .await?;
-
-            return Ok(());
-        }
-
         let chat_id = msg.chat.id;
-        let user_text = msg.text().unwrap().to_owned();
+        let user_text = match msg.text() {
+            Some(t) => t.to_owned(),
+            None => {
+                self.bot
+                    .send_message(chat_id, "Only text messages are supported.")
+                    .await?;
+                return Ok(());
+            }
+        };
         let user_message =
             conversation::Message::with_text(MessageRole::User, user_text, &self.tokenizer);
 
@@ -140,13 +140,16 @@ impl App {
             return Ok(());
         }
 
-        let developer_prompt_tokens = conversation
-            .developer_prompt
-            .as_ref()
-            .map_or(0, |p| p.tokens);
-        conversation.prune_to_token_budget(
-            self.max_prompt_tokens - developer_prompt_tokens - user_message.tokens,
-        );
+        let developer_prompt_tokens = self.developer_prompt0.tokens
+            + conversation
+                .developer_prompt
+                .as_ref()
+                .map(|p| p.tokens)
+                .unwrap_or(0);
+        let budget = self
+            .max_prompt_tokens
+            .saturating_sub(developer_prompt_tokens + user_message.tokens);
+        conversation.prune_to_token_budget(budget);
 
         let history = std::iter::once(&self.developer_prompt0)
             .chain(conversation.developer_prompt.iter())
