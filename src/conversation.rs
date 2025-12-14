@@ -9,7 +9,7 @@ pub struct Conversation {
     pub prompt_tokens: usize,
     pub is_authorized: bool,
     pub openai_api_key: String,
-    pub system_prompt: Option<Message>,
+    pub developer_prompt: Option<Message>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -22,7 +22,7 @@ pub struct Message {
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum MessageRole {
-    System = 0,
+    Developer = 0,
     User = 1,
     Assistant = 2,
 }
@@ -82,7 +82,7 @@ impl TokenCounter {
 impl Display for MessageRole {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            MessageRole::System => write!(f, "system"),
+            MessageRole::Developer => write!(f, "developer"),
             MessageRole::User => write!(f, "user"),
             MessageRole::Assistant => write!(f, "assistant"),
         }
@@ -94,7 +94,7 @@ impl TryFrom<u8> for MessageRole {
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
-            0 => Ok(MessageRole::System),
+            0 => Ok(MessageRole::Developer),
             1 => Ok(MessageRole::User),
             2 => Ok(MessageRole::Assistant),
             _ => Err(()),
@@ -104,6 +104,6 @@ impl TryFrom<u8> for MessageRole {
 
 impl Default for MessageRole {
     fn default() -> Self {
-        MessageRole::System
+        MessageRole::Developer
     }
 }

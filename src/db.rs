@@ -62,7 +62,7 @@ fn init_schema(conn: &Connection) -> Result<(), SqliteError> {
             chat_id INTEGER PRIMARY KEY NOT NULL,
             is_authorized BOOLEAN NOT NULL,
             open_ai_api_key  TEXT NOT NULL,
-            system_prompt    TEXT NOT NULL
+            developer_prompt    TEXT NOT NULL
         )",
         [],
     )?;
@@ -90,21 +90,21 @@ pub async fn load_conversation(
         let conversation = {
             // Fetch exactly one chat row; panic if multiple rows are found.
             let mut stmt = conn.prepare(
-                "SELECT is_authorized, open_ai_api_key, system_prompt \
+                "SELECT is_authorized, open_ai_api_key, developer_prompt \
             FROM chats WHERE chat_id = ?1 LIMIT 2",
             )?;
             let mut rows = stmt.query([chat_id.0])?;
 
-            let (is_authorized, open_ai_api_key, system_prompt) = match rows.next()? {
+            let (is_authorized, open_ai_api_key, developer_prompt) = match rows.next()? {
                 Some(row) => {
                     let is_authorized: bool = row.get(0)?;
                     let open_ai_api_key: String = row.get(1)?;
-                    let system_prompt: String = row.get(2)?;
-                    (is_authorized, open_ai_api_key, system_prompt)
+                    let developer_prompt: String = row.get(2)?;
+                    (is_authorized, open_ai_api_key, developer_prompt)
                 }
                 None => {
                     let r = conn.execute(
-                    "INSERT INTO chats (chat_id, is_authorized, open_ai_api_key, system_prompt) \
+                    "INSERT INTO chats (chat_id, is_authorized, open_ai_api_key, developer_prompt) \
                      VALUES (?1, ?2, ?3, ?4)",
                     rusqlite::params![chat_id.0, false, "", ""],
                 )?;
@@ -122,10 +122,10 @@ pub async fn load_conversation(
                 panic!("multiple chat rows found for chat_id {}", chat_id.0);
             }
 
-            let system_prompt = if !system_prompt.is_empty() {
+            let developer_prompt = if !developer_prompt.is_empty() {
                 Some(conversation::Message::with_text(
-                    MessageRole::System,
-                    system_prompt,
+                    MessageRole::Developer,
+                    developer_prompt,
                     tokenizer,
                 ))
             } else {
@@ -138,7 +138,7 @@ pub async fn load_conversation(
                 prompt_tokens: 0,
                 is_authorized,
                 openai_api_key: open_ai_api_key,
-                system_prompt,
+                developer_prompt,
             }
         };
 

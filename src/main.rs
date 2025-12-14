@@ -37,6 +37,7 @@ struct App {
     max_prompt_tokens: usize,
     conversations: Arc<Mutex<HashMap<ChatId, Conversation>>>,
     db: Arc<Mutex<Connection>>,
+    developer_prompt0: conversation::Message,
 }
 
 #[tokio::main]
@@ -87,6 +88,13 @@ async fn init() -> anyhow::Result<App, anyhow::Error> {
     let conversations: Arc<Mutex<HashMap<ChatId, Conversation>>> =
         Arc::new(Mutex::new(HashMap::new()));
 
+    let developer_text0 = "Do not output markdown, use plain text.".to_string();
+    let developer_prompt0 = conversation::Message {
+        role: conversation::MessageRole::Developer,
+        tokens: tokenizer.count_text(&developer_text0),
+        text: developer_text0,
+    };
+
     log::info!("starting tggpt bot with model: {model}, max prompt tokens: {max_prompt_tokens}");
 
     Ok(App {
@@ -97,6 +105,7 @@ async fn init() -> anyhow::Result<App, anyhow::Error> {
         max_prompt_tokens,
         conversations,
         db,
+        developer_prompt0,
     })
 }
 
@@ -131,15 +140,16 @@ impl App {
             return Ok(());
         }
 
-        let system_prompt_tokens = conversation.system_prompt.as_ref().map_or(0, |p| p.tokens);
+        let developer_prompt_tokens = conversation
+            .developer_prompt
+            .as_ref()
+            .map_or(0, |p| p.tokens);
         conversation.prune_to_token_budget(
-            self.max_prompt_tokens - system_prompt_tokens - user_message.tokens,
+            self.max_prompt_tokens - developer_prompt_tokens - user_message.tokens,
         );
 
-        let history = conversation
-            .system_prompt
-            .as_ref()
-            .into_iter()
+        let history = std::iter::once(&self.developer_prompt0)
+            .chain(conversation.developer_prompt.iter())
             .chain(conversation.history.iter())
             .chain(std::iter::once(&user_message));
 

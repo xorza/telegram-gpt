@@ -4,7 +4,7 @@ Telegram bot that relays user messages to the OpenAI Responses API, keeps a roll
 
 ## Features
 - Telegram transport via `teloxide`, responding only to text messages.
-- Per-chat OpenAI API key, optional system prompt, and on-disk history so context survives restarts.
+- Per-chat OpenAI API key, optional developer prompt, and on-disk history so context survives restarts.
 - Token counting with `tiktoken-rs`; oldest turns are pruned to stay within the model context window.
 - Rotating file logs in `logs/` (10 MB, keep 3) plus stdout duplication.
 
@@ -36,14 +36,14 @@ New chats are inserted into `chats` with `is_authorized = 0` and no API key. The
 3. Update the database (replace placeholders):
 ```sh
 sqlite3 data/db.sqlite \
-  "UPDATE chats SET is_authorized=1, open_ai_api_key='sk-...', system_prompt='You are a helpful assistant.' WHERE chat_id=<chat_id>;"
+  "UPDATE chats SET is_authorized=1, open_ai_api_key='sk-...', developer_prompt='You are a helpful assistant.' WHERE chat_id=<chat_id>;"
 ```
 
 Each chat uses its own OpenAI API key; you can store different keys or prompts per chat.
 
 ## Persistence model
 - `history` table stores alternating user/assistant messages with token counts.
-- `chats` table stores authorization flag, API key, and optional system prompt.
+- `chats` table stores authorization flag, API key, and optional developer prompt.
 - Conversations are reloaded on startup and trimmed to fit the model's context length.
 
 ## Operational notes
