@@ -190,7 +190,7 @@ where
                     | "response.refusal.done"
                     | "response.output_item.done"
                     | "response.completed" => {
-                        panic!("Unexpected event type")
+                        // Ignore
                     }
                     _ => {
                         // Ignore other event types.

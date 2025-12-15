@@ -19,9 +19,6 @@ pub fn init_db() -> Result<Connection> {
 
     let conn = Connection::open(&db_path)?;
 
-    // Enable WAL for better concurrency; ignore errors silently.
-    // let _ = conn.pragma_update(None, "journal_mode", "WAL");
-
     match std::env::var("DB_ENCRYPTION_KEY") {
         Ok(key) if !key.is_empty() => conn.pragma_update(None, "key", &key)?,
         _ => log::warn!("DB_ENCRYPTION_KEY not set; database will be unencrypted"),
