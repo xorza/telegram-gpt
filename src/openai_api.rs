@@ -45,7 +45,6 @@ where
     })
 }
 
-#[allow(dead_code)]
 pub async fn send<F, Fut>(
     http: &Client,
     api_key: &str,

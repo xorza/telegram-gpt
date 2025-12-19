@@ -1,9 +1,17 @@
+use crate::conversation::{Message, MessageRole};
 use anyhow::Context;
 use reqwest::Client;
 use serde::Deserialize;
+use serde_json::json;
 
 #[allow(dead_code)]
 const MODELS_ENDPOINT: &str = "https://openrouter.ai/api/v1/models";
+
+#[derive(Debug)]
+enum ContentType {
+    Input,
+    Output,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModelSummary {
@@ -59,6 +67,74 @@ pub async fn list_models(http: &Client, api_key: &str) -> anyhow::Result<Vec<Mod
     Ok(parsed.data.into_iter().map(model_to_summary).collect())
 }
 
+#[allow(dead_code)]
+pub fn prepare_payload<'a, I>(model: &str, messages: I, stream: bool) -> serde_json::Value
+where
+    I: IntoIterator<Item = &'a Message>,
+{
+    let mut input_items = Vec::new();
+
+    for msg in messages {
+        input_items.push(text_content(
+            msg.role,
+            &msg.text,
+            if msg.role == MessageRole::Assistant {
+                ContentType::Output
+            } else {
+                ContentType::Input
+            },
+        ));
+    }
+
+    json!({
+        "model": model,
+        "input": input_items,
+        "tools": [
+            {
+                "type": "web_search",
+                // "user_location": {
+                //     "type": "approximate",
+                //     "country": "US"
+                // }
+            }
+        ],
+        "tool_choice": "auto",
+        "stream": stream,
+    })
+}
+
+#[allow(dead_code)]
+pub async fn send<F, Fut>(
+    http: &Client,
+    api_key: &str,
+    payload: serde_json::Value,
+    _stream: bool,
+    on_delta: F,
+) -> anyhow::Result<String>
+where
+    F: FnMut(String, bool) -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
+{
+    // if stream {
+    // send_streaming(http, api_key, payload, on_delta).await
+    // } else {
+    send_no_streaming(http, api_key, payload, on_delta).await
+    // }
+}
+
+async fn send_no_streaming<F, Fut>(
+    http: &Client,
+    api_key: &str,
+    payload: serde_json::Value,
+    mut on_delta: F,
+) -> anyhow::Result<String>
+where
+    F: FnMut(String, bool) -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
+{
+    Ok("".to_string())
+}
+
 fn model_to_summary(model: ModelRecord) -> ModelSummary {
     let pricing = model.pricing;
 
@@ -69,6 +145,23 @@ fn model_to_summary(model: ModelRecord) -> ModelSummary {
         prompt_m_token_cost_usd: 1_000_000.0 * pricing.prompt.parse::<f64>().unwrap(),
         completion_m_token_cost_usd: 1_000_000.0 * pricing.completion.parse::<f64>().unwrap(),
     }
+}
+
+fn text_content(role: MessageRole, text: &str, content_type: ContentType) -> serde_json::Value {
+    let type_str = match content_type {
+        ContentType::Input => "input_text",
+        ContentType::Output => "output_text",
+    };
+
+    json!({
+        "role": role.to_string(),
+        "content": [
+            {
+                "type": type_str,
+                "text": text
+            }
+        ]
+    })
 }
 
 #[cfg(test)]
