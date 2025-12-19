@@ -151,8 +151,9 @@ where
             let owned = trimmed.to_string();
             on_delta(owned.clone(), true).await?;
 
-            if let Some(usage) = extract_usage(&response_body) {
-                info!(
+            let usage = extract_usage(&response_body);
+            if let Some(usage) = usage {
+                println!(
                     "OpenRouter usage — prompt: {:?}, completion: {:?}, total: {:?}, cost: {:?}",
                     usage.prompt_tokens, usage.completion_tokens, usage.total_tokens, usage.cost
                 );
@@ -170,9 +171,9 @@ where
 #[derive(Debug)]
 struct Usage {
     prompt_tokens: u64,
-    completion_tokens: Option<u64>,
-    total_tokens: Option<u64>,
-    cost: Option<f64>,
+    completion_tokens: u64,
+    total_tokens: u64,
+    cost: f64,
 }
 
 fn extract_usage(value: &serde_json::Value) -> Option<Usage> {
@@ -180,13 +181,21 @@ fn extract_usage(value: &serde_json::Value) -> Option<Usage> {
 
     Some(Usage {
         prompt_tokens: usage
-            .get("prompt_tokens")
-            .expect("prompt_tokens is missing")
+            .get("input_tokens")
+            .expect("Missing input_tokens")
             .as_u64()
-            .expect("prompt_tokens is not a number"),
-        completion_tokens: usage.get("completion_tokens").and_then(|v| v.as_u64()),
-        total_tokens: usage.get("total_tokens").and_then(|v| v.as_u64()),
-        cost: usage.get("cost").and_then(|v| v.as_f64()),
+            .expect(""),
+        completion_tokens: usage
+            .get("output_tokens")
+            .expect("Missing output_tokens")
+            .as_u64()
+            .expect(""),
+        total_tokens: usage
+            .get("total_tokens")
+            .expect("Missing total_tokens")
+            .as_u64()
+            .expect(""),
+        cost: usage.get("cost").expect("Missing cost").as_f64().expect(""),
     })
 }
 
@@ -331,6 +340,56 @@ mod tests {
         assert!(
             models.iter().any(|m| !m.id.is_empty()),
             "expected at least one model id"
+        );
+    }
+
+    // Integration test that calls the live OpenRouter responses endpoint (non-streaming).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn live_send_no_streaming_returns_text() {
+        let http = reqwest::Client::new();
+        let api_key =
+            std::env::var("OPENROUTER_TEST_MODEL").expect("OPENROUTER_TEST_MODEL env var not set");
+        let model =
+            std::env::var("OPENROUTER_MODEL").unwrap_or_else(|_| "openrouter/auto".to_string());
+
+        let user_message = Message {
+            role: MessageRole::User,
+            tokens: 0,
+            text: "Say hello in one short sentence.".to_string(),
+        };
+
+        let payload = prepare_payload(&model, std::iter::once(&user_message), false);
+
+        let buffer = std::sync::Arc::new(tokio::sync::Mutex::new(String::new()));
+        let buffer_clone = buffer.clone();
+
+        let result = send_no_streaming(
+            &http,
+            &api_key,
+            payload,
+            move |delta: String, finalize: bool| {
+                let buffer = buffer_clone.clone();
+                async move {
+                    let mut buf = buffer.lock().await;
+                    buf.push_str(&delta);
+                    if finalize {
+                        // no-op; we just rely on final result return
+                    }
+                    Ok(())
+                }
+            },
+        )
+        .await
+        .expect("send_no_streaming failed");
+
+        let captured = buffer.lock().await.clone();
+        assert!(
+            !result.trim().is_empty(),
+            "LLM response should not be empty"
+        );
+        assert!(
+            !captured.trim().is_empty(),
+            "on_delta should have received content"
         );
     }
 }
