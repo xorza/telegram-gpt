@@ -3,6 +3,7 @@
 mod conversation;
 mod db;
 mod openai_api;
+mod openrouter_api;
 mod typing;
 
 use anyhow::{Context, anyhow};
