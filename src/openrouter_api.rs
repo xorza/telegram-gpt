@@ -145,22 +145,19 @@ where
 
     let response_body: serde_json::Value = serde_json::from_str(&body_text)?;
 
-    if let Some(text) = extract_output_text(&response_body) {
-        let trimmed = text.trim();
-        if !trimmed.is_empty() {
-            let owned = trimmed.to_string();
-            on_delta(owned.clone(), true).await?;
+    let text = extract_output_text(&response_body);
+    if !text.is_empty() {
+        on_delta(text.clone(), true).await?;
 
-            let usage = extract_usage(&response_body);
-            if let Some(usage) = usage {
-                println!(
-                    "OpenRouter usage — prompt: {:?}, completion: {:?}, total: {:?}, cost: {:?}",
-                    usage.prompt_tokens, usage.completion_tokens, usage.total_tokens, usage.cost
-                );
-            }
-
-            return Ok(owned);
+        let usage = extract_usage(&response_body);
+        if let Some(usage) = usage {
+            println!(
+                "OpenRouter usage — prompt: {:?}, completion: {:?}, total: {:?}, cost: {:?}",
+                usage.prompt_tokens, usage.completion_tokens, usage.total_tokens, usage.cost
+            );
         }
+
+        return Ok(text);
     }
 
     Err(anyhow!(
@@ -210,6 +207,8 @@ fn extract_output_text(value: &serde_json::Value) -> String {
         .map(|v| v.get("text").expect("").to_string())
         .collect::<Vec<String>>()
         .join("\n")
+        .trim()
+        .to_string()
 }
 
 fn model_to_summary(model: ModelRecord) -> ModelSummary {
