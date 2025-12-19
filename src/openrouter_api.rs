@@ -89,16 +89,9 @@ where
     json!({
         "model": model,
         "input": input_items,
-        "tools": [
-            {
-                "type": "web_search",
-                // "user_location": {
-                //     "type": "approximate",
-                //     "country": "US"
-                // }
-            }
+        "plugins": [
+            { "id": "web" }
         ],
-        "tool_choice": "auto",
         "stream": stream,
     })
 }
