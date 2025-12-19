@@ -291,11 +291,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn live_openrouter_models() {
         let http = reqwest::Client::new();
-        let api_key =
-            std::env::var("OPENROUTER_API_KEY").expect("OPENROUTER_API_KEY env var not set");
-        let models = list_models(&http, &api_key)
-            .await
-            .expect("live models fetch failed");
+        let models = list_models(&http).await.expect("live models fetch failed");
 
         assert!(
             !models.is_empty(),

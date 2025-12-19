@@ -58,7 +58,7 @@ fn init_schema(conn: &Connection) -> Result<(), SqliteError> {
         "CREATE TABLE IF NOT EXISTS chats (
             chat_id INTEGER PRIMARY KEY NOT NULL,
             is_authorized BOOLEAN NOT NULL,
-            open_ai_api_key  TEXT NOT NULL,
+            openrouter_api_key  TEXT NOT NULL,
             developer_prompt    TEXT NOT NULL
         )",
         [],
@@ -86,21 +86,21 @@ pub async fn load_conversation(
         let conversation = {
             // Fetch exactly one chat row; panic if multiple rows are found.
             let mut stmt = conn.prepare(
-                "SELECT is_authorized, open_ai_api_key, developer_prompt \
+                "SELECT is_authorized, openrouter_api_key, developer_prompt \
             FROM chats WHERE chat_id = ?1 LIMIT 2",
             )?;
             let mut rows = stmt.query([chat_id.0])?;
 
-            let (is_authorized, open_ai_api_key, developer_prompt) = match rows.next()? {
+            let (is_authorized, openrouter_api_key, developer_prompt) = match rows.next()? {
                 Some(row) => {
                     let is_authorized: bool = row.get(0)?;
-                    let open_ai_api_key: String = row.get(1)?;
+                    let openrouter_api_key: String = row.get(1)?;
                     let developer_prompt: String = row.get(2)?;
-                    (is_authorized, open_ai_api_key, developer_prompt)
+                    (is_authorized, openrouter_api_key, developer_prompt)
                 }
                 None => {
                     let r = conn.execute(
-                    "INSERT INTO chats (chat_id, is_authorized, open_ai_api_key, developer_prompt) \
+                    "INSERT INTO chats (chat_id, is_authorized, openrouter_api_key, developer_prompt) \
                      VALUES (?1, ?2, ?3, ?4)",
                     rusqlite::params![chat_id.0, false, "", ""],
                 )?;
@@ -133,7 +133,7 @@ pub async fn load_conversation(
                 history: Default::default(),
                 prompt_tokens: 0,
                 is_authorized,
-                openai_api_key: open_ai_api_key,
+                openai_api_key: openrouter_api_key,
                 developer_prompt,
             }
         };

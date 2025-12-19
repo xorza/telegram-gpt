@@ -99,7 +99,6 @@ async fn init() -> anyhow::Result<App, anyhow::Error> {
         bot,
         http_client,
         model,
-
         conversations,
         db,
         developer_prompt0,
@@ -226,19 +225,6 @@ impl App {
         }))
     }
 }
-
-// impl Debug for App {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         f.debug_struct("App")
-//             .field("bot", &self.bot)
-//             .field("http_client", &self.http_client)
-//             .field("model", &self.model)
-//             .field("tokenizer", &"?")
-//             .field("max_prompt_tokens", &self.max_prompt_tokens)
-//             .field("conversations", &self.conversations)
-//             .finish()
-//     }
-// }
 
 async fn handle_stream_delta(
     bot: Bot,
