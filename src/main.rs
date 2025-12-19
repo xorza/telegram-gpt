@@ -27,12 +27,11 @@ const DEFAULT_MODEL: &str = "xiaomi/mimo-v2-flash:free";
 const TELEGRAM_MAX_MESSAGE_LENGTH: usize = 4096;
 const STREAM_RESPONSE: bool = false;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 struct App {
     bot: Bot,
     http_client: Arc<reqwest::Client>,
-    model: String,
-    max_prompt_tokens: usize,
+    model: openrouter_api::ModelSummary,
     conversations: Arc<Mutex<HashMap<ChatId, Conversation>>>,
     db: Arc<Mutex<Connection>>,
     developer_prompt0: conversation::Message,
@@ -75,9 +74,8 @@ async fn init() -> anyhow::Result<App, anyhow::Error> {
 
     let bot = Bot::from_env();
     let http_client = Arc::new(reqwest::Client::new());
-    let model = std::env::var("OPENROUTER_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
-
-    let max_prompt_tokens = openrouter_api::context_length(&model).await?;
+    let model_id = std::env::var("OPENROUTER_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
+    let model = openrouter_api::model(&http_client, &model_id).await?;
 
     let db = Arc::new(Mutex::new(db::init_db()?));
 
@@ -91,13 +89,17 @@ async fn init() -> anyhow::Result<App, anyhow::Error> {
         text: developer_text0,
     };
 
-    log::info!("starting tggpt bot with model: {model}, max prompt tokens: {max_prompt_tokens}");
+    log::info!(
+        "starting tggpt bot with model: {}, max prompt tokens: {}",
+        model.id,
+        model.context_length
+    );
 
     Ok(App {
         bot,
         http_client,
         model,
-        max_prompt_tokens,
+
         conversations,
         db,
         developer_prompt0,
@@ -145,7 +147,8 @@ impl App {
                 .map(|p| p.tokens)
                 .unwrap_or(0);
         let budget = self
-            .max_prompt_tokens
+            .model
+            .context_length
             .saturating_sub(developer_prompt_tokens + user_message.tokens);
         conversation.prune_to_token_budget(budget);
 
@@ -154,7 +157,7 @@ impl App {
             .chain(conversation.history.iter())
             .chain(std::iter::once(&user_message));
 
-        let payload = openrouter_api::prepare_payload(&self.model, history, STREAM_RESPONSE);
+        let payload = openrouter_api::prepare_payload(&self.model.id, history, STREAM_RESPONSE);
         let openai_api_key = conversation.openai_api_key.clone();
 
         drop(conversation);
@@ -214,7 +217,7 @@ impl App {
         let mut conv_map = self.conversations.lock().await;
 
         if !conv_map.contains_key(&chat_id) {
-            let conv = db::load_conversation(&self.db, chat_id, self.max_prompt_tokens).await?;
+            let conv = db::load_conversation(&self.db, chat_id, self.model.context_length).await?;
             conv_map.insert(chat_id, conv);
         }
 
@@ -224,18 +227,18 @@ impl App {
     }
 }
 
-impl Debug for App {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("App")
-            .field("bot", &self.bot)
-            .field("http_client", &self.http_client)
-            .field("model", &self.model)
-            .field("tokenizer", &"?")
-            .field("max_prompt_tokens", &self.max_prompt_tokens)
-            .field("conversations", &self.conversations)
-            .finish()
-    }
-}
+// impl Debug for App {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         f.debug_struct("App")
+//             .field("bot", &self.bot)
+//             .field("http_client", &self.http_client)
+//             .field("model", &self.model)
+//             .field("tokenizer", &"?")
+//             .field("max_prompt_tokens", &self.max_prompt_tokens)
+//             .field("conversations", &self.conversations)
+//             .finish()
+//     }
+// }
 
 async fn handle_stream_delta(
     bot: Bot,

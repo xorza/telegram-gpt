@@ -55,8 +55,8 @@ pub struct Response {
 
 /// Fetch available OpenRouter models, returning their ids, context limits, and token prices.
 #[allow(dead_code)]
-pub async fn list_models(http: &Client, api_key: &str) -> anyhow::Result<Vec<ModelSummary>> {
-    let request = http.get(MODELS_ENDPOINT).bearer_auth(api_key);
+pub async fn list_models(http: &Client) -> anyhow::Result<Vec<ModelSummary>> {
+    let request = http.get(MODELS_ENDPOINT);
 
     let response = request
         .send()
@@ -77,8 +77,14 @@ pub async fn list_models(http: &Client, api_key: &str) -> anyhow::Result<Vec<Mod
     Ok(parsed.data.into_iter().map(model_to_summary).collect())
 }
 
-pub async fn context_length(model: &str) -> anyhow::Result<usize> {
-    unimplemented!()
+pub async fn model(http: &Client, model: &str) -> anyhow::Result<ModelSummary> {
+    let models = list_models(http).await?;
+    let model = models
+        .into_iter()
+        .find(|m| m.id == model)
+        .ok_or_else(|| anyhow::anyhow!("model not found"))?;
+
+    return Ok(model);
 }
 
 #[allow(dead_code)]
