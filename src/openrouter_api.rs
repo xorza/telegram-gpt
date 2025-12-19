@@ -10,11 +10,10 @@ const MODELS_ENDPOINT: &str = "https://openrouter.ai/api/v1/models";
 pub struct ModelSummary {
     pub id: String,
     pub name: String,
-    /// Max supported input context (tokens). Uses provider-specific override when available.
     pub context_length: usize,
-    /// USD cost per prompt token. Multiply by 1_000_000 for “per million” pricing.
+    /// USD cost per million prompt token.
     pub prompt_m_token_cost_usd: f64,
-    /// USD cost per completion/output token.
+    /// USD cost per million completion/output token.
     pub completion_m_token_cost_usd: f64,
 }
 
@@ -42,14 +41,9 @@ struct Pricing {
 /// * `api_key` – Optional bearer token. Anonymous requests work for public models but
 ///   authenticated requests include private/whitelisted models.
 #[allow(dead_code)]
-pub async fn list_models(
-    http: &Client,
-    api_key: Option<&str>,
-) -> anyhow::Result<Vec<ModelSummary>> {
+pub async fn list_models(http: &Client, api_key: &str) -> anyhow::Result<Vec<ModelSummary>> {
     let mut request = http.get(MODELS_ENDPOINT);
-    if let Some(key) = api_key {
-        request = request.bearer_auth(key);
-    }
+    request = request.bearer_auth(api_key);
 
     let response = request
         .send()
@@ -119,12 +113,11 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn live_openrouter_models() {
         let http = reqwest::Client::new();
-        let api_key = std::env::var("OPENROUTER_API_KEY").ok();
-        let models = list_models(&http, api_key.as_deref())
+        let api_key =
+            std::env::var("OPENROUTER_API_KEY").expect("OPENROUTER_API_KEY env var not set");
+        let models = list_models(&http, &api_key)
             .await
             .expect("live models fetch failed");
-
-        println!("{:?}", models);
 
         assert!(
             !models.is_empty(),
