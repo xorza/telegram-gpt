@@ -5,7 +5,6 @@ use serde::Deserialize;
 #[allow(dead_code)]
 const MODELS_ENDPOINT: &str = "https://openrouter.ai/api/v1/models";
 
-/// Minimal, uniform view over an OpenRouter model.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModelSummary {
     pub id: String,
