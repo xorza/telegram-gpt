@@ -18,7 +18,7 @@ enum ContentType {
 pub struct ModelSummary {
     pub id: String,
     pub name: String,
-    pub context_length: usize,
+    pub context_length: u64,
     /// USD cost per million prompt token.
     pub prompt_m_token_cost_usd: f64,
     /// USD cost per million completion/output token.
@@ -34,7 +34,7 @@ struct ModelsResponse {
 struct ModelRecord {
     id: String,
     name: String,
-    context_length: usize,
+    context_length: u64,
     pricing: Pricing,
 }
 
@@ -50,7 +50,7 @@ pub struct Response {
     pub completion_tokens: u64,
     pub total_tokens: u64,
     pub cost: f64,
-    pub assistant_text: String,
+    pub completion_text: String,
 }
 
 /// Fetch available OpenRouter models, returning their ids, context limits, and token prices.
@@ -178,8 +178,8 @@ where
     let response_body: serde_json::Value = serde_json::from_str(&body_text)?;
 
     let response = extract_output_text(&response_body);
-    if !response.assistant_text.is_empty() {
-        on_delta(response.assistant_text.clone(), true).await?;
+    if !response.completion_text.is_empty() {
+        on_delta(response.completion_text.clone(), true).await?;
         return Ok(response);
     }
 
@@ -221,7 +221,7 @@ fn extract_output_text(value: &serde_json::Value) -> Response {
             .as_u64()
             .unwrap(),
         cost: usage.get("cost").expect("Missing cost").as_f64().unwrap(),
-        assistant_text: text,
+        completion_text: text,
     }
 }
 

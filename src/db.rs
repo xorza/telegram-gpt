@@ -78,7 +78,7 @@ fn set_schema_version(conn: &Connection, version: i32) -> Result<(), SqliteError
 pub async fn load_conversation(
     db: &Arc<Mutex<Connection>>,
     chat_id: ChatId,
-    max_tokens: usize,
+    max_tokens: u64,
 ) -> anyhow::Result<Conversation> {
     let (mut conversation, history) = {
         let conn = db.lock().await;
@@ -146,7 +146,7 @@ pub async fn load_conversation(
             )?;
 
             let rows = stmt.query_map([chat_id.0], |row| {
-                let tokens: usize = row.get(0)?;
+                let tokens: u64 = row.get(0)?;
                 let role: u8 = row.get(1)?;
                 let text: String = row.get(2)?;
                 let role = MessageRole::try_from(role).expect("Invalid message role");
@@ -155,7 +155,7 @@ pub async fn load_conversation(
             })?;
 
             let mut history: Vec<conversation::Message> = Vec::new();
-            let mut total_tokens: usize = 0;
+            let mut total_tokens: u64 = 0;
 
             for row in rows {
                 if let Ok(message) = row {

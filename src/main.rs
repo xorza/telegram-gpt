@@ -185,8 +185,8 @@ impl App {
             Ok(llm_response) => {
                 let assistant_message = conversation::Message {
                     role: MessageRole::Assistant,
-                    text: llm_response.assistant_text,
-                    tokens: 0,
+                    text: llm_response.completion_text,
+                    tokens: llm_response.completion_tokens,
                 };
                 let messages = [user_message, assistant_message];
                 self.get_conversation(chat_id)

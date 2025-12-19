@@ -5,7 +5,7 @@ use std::{collections::VecDeque, fmt::Display, sync::Arc};
 pub struct Conversation {
     pub chat_id: u64,
     pub history: VecDeque<Message>,
-    pub prompt_tokens: usize,
+    pub prompt_tokens: u64,
     pub is_authorized: bool,
     pub openai_api_key: String,
     pub developer_prompt: Option<Message>,
@@ -14,7 +14,7 @@ pub struct Conversation {
 #[derive(Debug, Clone, Default)]
 pub struct Message {
     pub role: MessageRole,
-    pub tokens: usize,
+    pub tokens: u64,
     pub text: String,
 }
 
@@ -42,7 +42,7 @@ impl Conversation {
         }
     }
 
-    pub fn prune_to_token_budget(&mut self, max_prompt_tokens: usize) {
+    pub fn prune_to_token_budget(&mut self, max_prompt_tokens: u64) {
         while self.prompt_tokens > max_prompt_tokens {
             if let Some(removed) = self.history.pop_front() {
                 self.prompt_tokens = self.prompt_tokens.saturating_sub(removed.tokens);
