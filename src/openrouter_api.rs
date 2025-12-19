@@ -199,66 +199,17 @@ fn extract_usage(value: &serde_json::Value) -> Option<Usage> {
     })
 }
 
-fn extract_output_text(value: &serde_json::Value) -> Option<String> {
-    // Primary path: Responses API shape (output_text array or output content blocks)
-    if let Some(array) = value.get("output_text").and_then(|v| v.as_array()) {
-        if !array.is_empty() {
-            return Some(
-                array
-                    .iter()
-                    .filter_map(|v| v.as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            );
-        }
-    }
-
-    if let Some(output) = value.get("output").and_then(|v| v.as_array()) {
-        let mut chunks = Vec::new();
-        for item in output {
-            if let Some(content) = item.get("content").and_then(|v| v.as_array()) {
-                for part in content {
-                    let part_type = part.get("type").and_then(|t| t.as_str());
-                    if part_type == Some("output_text") || part_type == Some("text") {
-                        if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
-                            chunks.push(text);
-                        }
-                    }
-                }
-            }
-        }
-        if !chunks.is_empty() {
-            return Some(chunks.join("\n"));
-        }
-    }
-
-    // Fallback: OpenAI-compatible chat/completions response
-    if let Some(choices) = value.get("choices").and_then(|v| v.as_array()) {
-        if let Some(choice) = choices.first() {
-            if let Some(msg) = choice.get("message") {
-                if let Some(content) = msg.get("content") {
-                    if let Some(text) = content.as_str() {
-                        return Some(text.to_string());
-                    }
-
-                    if let Some(parts) = content.as_array() {
-                        let mut chunks = Vec::new();
-                        for part in parts {
-                            if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
-                                chunks.push(text);
-                            }
-                        }
-
-                        if !chunks.is_empty() {
-                            return Some(chunks.join(""));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    None
+fn extract_output_text(value: &serde_json::Value) -> String {
+    value
+        .get("output")
+        .expect("")
+        .as_array()
+        .expect("")
+        .into_iter()
+        .flat_map(|v| v.get("content").expect("").as_array().expect(""))
+        .map(|v| v.get("text").expect("").to_string())
+        .collect::<Vec<String>>()
+        .join("\n")
 }
 
 fn model_to_summary(model: ModelRecord) -> ModelSummary {
@@ -348,9 +299,9 @@ mod tests {
     async fn live_send_no_streaming_returns_text() {
         let http = reqwest::Client::new();
         let api_key =
-            std::env::var("OPENROUTER_TEST_MODEL").expect("OPENROUTER_TEST_MODEL env var not set");
-        let model =
-            std::env::var("OPENROUTER_MODEL").unwrap_or_else(|_| "openrouter/auto".to_string());
+            std::env::var("OPENROUTER_API_KEY").expect("OPENROUTER_API_KEY env var not set");
+        let model = std::env::var("OPENROUTER_TEST_MODEL")
+            .unwrap_or_else(|_| "xiaomi/mimo-v2-flash:free".to_string());
 
         let user_message = Message {
             role: MessageRole::User,
@@ -373,7 +324,7 @@ mod tests {
                     let mut buf = buffer.lock().await;
                     buf.push_str(&delta);
                     if finalize {
-                        // no-op; we just rely on final result return
+                        println!("Model reponse: {}", buf);
                     }
                     Ok(())
                 }
