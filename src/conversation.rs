@@ -1,6 +1,5 @@
 use log::warn;
 use std::{collections::VecDeque, fmt::Display, sync::Arc};
-use tiktoken_rs::{CoreBPE, get_bpe_from_model, o200k_base};
 
 #[derive(Debug)]
 pub struct Conversation {
@@ -27,11 +26,6 @@ pub enum MessageRole {
     Assistant = 2,
 }
 
-#[derive(Clone)]
-pub struct TokenCounter {
-    bpe: Arc<CoreBPE>,
-}
-
 impl Conversation {
     pub fn add_message(&mut self, message: Message) {
         // Token count is managed by callers during reconstruction/loading.
@@ -54,28 +48,6 @@ impl Conversation {
                 self.prompt_tokens = self.prompt_tokens.saturating_sub(removed.tokens);
             }
         }
-    }
-}
-
-impl Message {
-    pub fn with_text(role: MessageRole, text: String, tokenizer: &TokenCounter) -> Self {
-        let tokens = tokenizer.count_text(&text);
-
-        Self { role, text, tokens }
-    }
-}
-
-impl TokenCounter {
-    pub fn new(model_name: &str) -> Self {
-        let bpe = get_bpe_from_model(model_name)
-            .or_else(|_| o200k_base())
-            .expect("failed to load tokenizer vocabulary")
-            .into();
-        Self { bpe }
-    }
-
-    pub fn count_text(&self, text: &str) -> usize {
-        self.bpe.encode_with_special_tokens(text).len()
     }
 }
 

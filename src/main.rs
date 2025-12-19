@@ -6,7 +6,7 @@ mod openrouter_api;
 mod typing;
 
 use anyhow::{Context, anyhow};
-use conversation::{Conversation, MessageRole, TokenCounter};
+use conversation::{Conversation, MessageRole};
 use flexi_logger::{Cleanup, Criterion, Duplicate, FileSpec, Logger, Naming};
 use reqwest::header::PROXY_AUTHENTICATE;
 use rusqlite::Connection;
@@ -32,7 +32,6 @@ struct App {
     bot: Bot,
     http_client: Arc<reqwest::Client>,
     model: String,
-    tokenizer: Arc<TokenCounter>,
     max_prompt_tokens: usize,
     conversations: Arc<Mutex<HashMap<ChatId, Conversation>>>,
     db: Arc<Mutex<Connection>>,
@@ -77,9 +76,8 @@ async fn init() -> anyhow::Result<App, anyhow::Error> {
     let bot = Bot::from_env();
     let http_client = Arc::new(reqwest::Client::new());
     let model = std::env::var("OPENROUTER_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
-    let tokenizer = Arc::new(TokenCounter::new(&model));
 
-    let max_prompt_tokens = openai_api::context_length(&model);
+    let max_prompt_tokens = openrouter_api::context_length(&model).await?;
 
     let db = Arc::new(Mutex::new(db::init_db()?));
 
@@ -89,7 +87,7 @@ async fn init() -> anyhow::Result<App, anyhow::Error> {
     let developer_text0 = "Do not output markdown, use plain text.".to_string();
     let developer_prompt0 = conversation::Message {
         role: conversation::MessageRole::Developer,
-        tokens: tokenizer.count_text(&developer_text0),
+        tokens: 0,
         text: developer_text0,
     };
 
@@ -99,7 +97,6 @@ async fn init() -> anyhow::Result<App, anyhow::Error> {
         bot,
         http_client,
         model,
-        tokenizer,
         max_prompt_tokens,
         conversations,
         db,
@@ -119,8 +116,11 @@ impl App {
                 return Ok(());
             }
         };
-        let user_message =
-            conversation::Message::with_text(MessageRole::User, user_text, &self.tokenizer);
+        let user_message = conversation::Message {
+            role: MessageRole::User,
+            text: user_text,
+            tokens: 0,
+        };
 
         let typing_indicator = TypingIndicator::new(self.bot.clone(), chat_id);
 
@@ -168,7 +168,7 @@ impl App {
             }
         };
 
-        let llm_result = openai_api::send(
+        let llm_response = openrouter_api::send(
             &self.http_client,
             &openai_api_key,
             payload,
@@ -179,13 +179,13 @@ impl App {
 
         drop(typing_indicator);
 
-        match llm_result {
-            Ok(assistant_text) => {
-                let assistant_message = conversation::Message::with_text(
-                    MessageRole::Assistant,
-                    assistant_text,
-                    &self.tokenizer,
-                );
+        match llm_response {
+            Ok(llm_response) => {
+                let assistant_message = conversation::Message {
+                    role: MessageRole::Assistant,
+                    text: llm_response.assistant_text,
+                    tokens: 0,
+                };
                 let messages = [user_message, assistant_message];
                 self.get_conversation(chat_id)
                     .await?
@@ -214,9 +214,7 @@ impl App {
         let mut conv_map = self.conversations.lock().await;
 
         if !conv_map.contains_key(&chat_id) {
-            let conv =
-                db::load_conversation(&self.db, chat_id, &self.tokenizer, self.max_prompt_tokens)
-                    .await?;
+            let conv = db::load_conversation(&self.db, chat_id, self.max_prompt_tokens).await?;
             conv_map.insert(chat_id, conv);
         }
 

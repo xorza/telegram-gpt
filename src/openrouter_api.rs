@@ -44,6 +44,15 @@ struct Pricing {
     completion: String,
 }
 
+#[derive(Debug)]
+pub struct Response {
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub total_tokens: u64,
+    pub cost: f64,
+    pub assistant_text: String,
+}
+
 /// Fetch available OpenRouter models, returning their ids, context limits, and token prices.
 #[allow(dead_code)]
 pub async fn list_models(http: &Client, api_key: &str) -> anyhow::Result<Vec<ModelSummary>> {
@@ -66,6 +75,10 @@ pub async fn list_models(http: &Client, api_key: &str) -> anyhow::Result<Vec<Mod
         serde_json::from_str(&body).context("failed to parse OpenRouter models response JSON")?;
 
     Ok(parsed.data.into_iter().map(model_to_summary).collect())
+}
+
+pub async fn context_length(model: &str) -> anyhow::Result<usize> {
+    unimplemented!()
 }
 
 #[allow(dead_code)]
@@ -105,7 +118,7 @@ pub async fn send<F, Fut>(
     payload: serde_json::Value,
     stream: bool,
     on_delta: F,
-) -> anyhow::Result<Usage>
+) -> anyhow::Result<Response>
 where
     F: FnMut(String, bool) -> Fut,
     Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
@@ -122,7 +135,7 @@ async fn send_streaming<F, Fut>(
     _api_key: &str,
     _payload: serde_json::Value,
     mut _on_delta: F,
-) -> anyhow::Result<Usage>
+) -> anyhow::Result<Response>
 where
     F: FnMut(String, bool) -> Fut,
     Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
@@ -135,7 +148,7 @@ async fn send_no_streaming<F, Fut>(
     api_key: &str,
     payload: serde_json::Value,
     mut on_delta: F,
-) -> anyhow::Result<Usage>
+) -> anyhow::Result<Response>
 where
     F: FnMut(String, bool) -> Fut,
     Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
@@ -158,12 +171,10 @@ where
 
     let response_body: serde_json::Value = serde_json::from_str(&body_text)?;
 
-    let text = extract_output_text(&response_body);
-    if !text.is_empty() {
-        on_delta(text.clone(), true).await?;
-
-        let usage = extract_usage(&response_body);
-        return Ok(usage);
+    let response = extract_output_text(&response_body);
+    if !response.assistant_text.is_empty() {
+        on_delta(response.assistant_text.clone(), true).await?;
+        return Ok(response);
     }
 
     Err(anyhow!(
@@ -171,18 +182,23 @@ where
     ))
 }
 
-#[derive(Debug)]
-pub struct Usage {
-    pub prompt_tokens: u64,
-    pub completion_tokens: u64,
-    pub total_tokens: u64,
-    pub cost: f64,
-}
+fn extract_output_text(value: &serde_json::Value) -> Response {
+    let text = value
+        .get("output")
+        .expect("")
+        .as_array()
+        .expect("")
+        .into_iter()
+        .flat_map(|v| v.get("content").expect("").as_array().expect(""))
+        .map(|v| v.get("text").expect("").to_string())
+        .collect::<Vec<String>>()
+        .join("\n")
+        .trim()
+        .to_string();
 
-fn extract_usage(value: &serde_json::Value) -> Usage {
     let usage = value.get("usage").expect("Missing usage");
 
-    Usage {
+    Response {
         prompt_tokens: usage
             .get("input_tokens")
             .expect("Missing input_tokens")
@@ -199,22 +215,8 @@ fn extract_usage(value: &serde_json::Value) -> Usage {
             .as_u64()
             .unwrap(),
         cost: usage.get("cost").expect("Missing cost").as_f64().unwrap(),
+        assistant_text: text,
     }
-}
-
-fn extract_output_text(value: &serde_json::Value) -> String {
-    value
-        .get("output")
-        .expect("")
-        .as_array()
-        .expect("")
-        .into_iter()
-        .flat_map(|v| v.get("content").expect("").as_array().expect(""))
-        .map(|v| v.get("text").expect("").to_string())
-        .collect::<Vec<String>>()
-        .join("\n")
-        .trim()
-        .to_string()
 }
 
 fn model_to_summary(model: ModelRecord) -> ModelSummary {

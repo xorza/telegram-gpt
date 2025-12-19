@@ -1,4 +1,4 @@
-use crate::conversation::{self, Conversation, Message, MessageRole, TokenCounter};
+use crate::conversation::{self, Conversation, Message, MessageRole};
 use anyhow::Result;
 use rusqlite::{Connection, Error as SqliteError};
 use std::sync::Arc;
@@ -78,7 +78,6 @@ fn set_schema_version(conn: &Connection, version: i32) -> Result<(), SqliteError
 pub async fn load_conversation(
     db: &Arc<Mutex<Connection>>,
     chat_id: ChatId,
-    tokenizer: &TokenCounter,
     max_tokens: usize,
 ) -> anyhow::Result<Conversation> {
     let (mut conversation, history) = {
@@ -120,11 +119,11 @@ pub async fn load_conversation(
             }
 
             let developer_prompt = if !developer_prompt.is_empty() {
-                Some(conversation::Message::with_text(
-                    MessageRole::Developer,
-                    developer_prompt,
-                    tokenizer,
-                ))
+                Some(conversation::Message {
+                    role: MessageRole::Developer,
+                    text: developer_prompt,
+                    tokens: 0,
+                })
             } else {
                 None
             };
