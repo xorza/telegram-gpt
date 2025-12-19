@@ -36,13 +36,9 @@ struct Pricing {
 }
 
 /// Fetch available OpenRouter models, returning their ids, context limits, and token prices.
-///
-/// * `api_key` – Optional bearer token. Anonymous requests work for public models but
-///   authenticated requests include private/whitelisted models.
 #[allow(dead_code)]
 pub async fn list_models(http: &Client, api_key: &str) -> anyhow::Result<Vec<ModelSummary>> {
-    let mut request = http.get(MODELS_ENDPOINT);
-    request = request.bearer_auth(api_key);
+    let request = http.get(MODELS_ENDPOINT).bearer_auth(api_key);
 
     let response = request
         .send()
