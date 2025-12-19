@@ -2,13 +2,11 @@
 
 mod conversation;
 mod db;
-mod openai_api;
 mod openrouter_api;
 mod typing;
 
 use anyhow::{Context, anyhow};
 use conversation::{Conversation, MessageRole, TokenCounter};
-use diesel::dsl::Find;
 use flexi_logger::{Cleanup, Criterion, Duplicate, FileSpec, Logger, Naming};
 use reqwest::header::PROXY_AUTHENTICATE;
 use rusqlite::Connection;
@@ -25,9 +23,9 @@ use teloxide::{
 use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard};
 use typing::TypingIndicator;
 
-const DEFAULT_OPEN_AI_MODEL: &str = "gpt-4.1";
+const DEFAULT_MODEL: &str = "xiaomi/mimo-v2-flash:free";
 const TELEGRAM_MAX_MESSAGE_LENGTH: usize = 4096;
-const STREAM_RESPONSE: bool = true;
+const STREAM_RESPONSE: bool = false;
 
 #[derive(Clone)]
 struct App {
@@ -78,8 +76,7 @@ async fn init() -> anyhow::Result<App, anyhow::Error> {
 
     let bot = Bot::from_env();
     let http_client = Arc::new(reqwest::Client::new());
-    let model =
-        std::env::var("OPEN_AI_MODEL").unwrap_or_else(|_| DEFAULT_OPEN_AI_MODEL.to_string());
+    let model = std::env::var("OPENROUTER_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
     let tokenizer = Arc::new(TokenCounter::new(&model));
 
     let max_prompt_tokens = openai_api::context_length(&model);
@@ -157,7 +154,7 @@ impl App {
             .chain(conversation.history.iter())
             .chain(std::iter::once(&user_message));
 
-        let payload = openai_api::prepare_payload(&self.model, history, STREAM_RESPONSE);
+        let payload = openrouter_api::prepare_payload(&self.model, history, STREAM_RESPONSE);
         let openai_api_key = conversation.openai_api_key.clone();
 
         drop(conversation);

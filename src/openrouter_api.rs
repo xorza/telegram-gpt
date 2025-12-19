@@ -103,18 +103,31 @@ pub async fn send<F, Fut>(
     http: &Client,
     api_key: &str,
     payload: serde_json::Value,
-    _stream: bool,
+    stream: bool,
     on_delta: F,
 ) -> anyhow::Result<Usage>
 where
     F: FnMut(String, bool) -> Fut,
     Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
 {
-    // if stream {
-    // send_streaming(http, api_key, payload, on_delta).await
-    // } else {
-    send_no_streaming(http, api_key, payload, on_delta).await
-    // }
+    if stream {
+        send_streaming(http, api_key, payload, on_delta).await
+    } else {
+        send_no_streaming(http, api_key, payload, on_delta).await
+    }
+}
+
+async fn send_streaming<F, Fut>(
+    _http: &Client,
+    _api_key: &str,
+    _payload: serde_json::Value,
+    mut _on_delta: F,
+) -> anyhow::Result<Usage>
+where
+    F: FnMut(String, bool) -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
+{
+    unimplemented!()
 }
 
 async fn send_no_streaming<F, Fut>(
