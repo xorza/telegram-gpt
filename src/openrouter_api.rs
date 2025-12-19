@@ -105,7 +105,7 @@ pub async fn send<F, Fut>(
     payload: serde_json::Value,
     _stream: bool,
     on_delta: F,
-) -> anyhow::Result<String>
+) -> anyhow::Result<Usage>
 where
     F: FnMut(String, bool) -> Fut,
     Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
@@ -122,7 +122,7 @@ async fn send_no_streaming<F, Fut>(
     api_key: &str,
     payload: serde_json::Value,
     mut on_delta: F,
-) -> anyhow::Result<String>
+) -> anyhow::Result<Usage>
 where
     F: FnMut(String, bool) -> Fut,
     Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
@@ -150,14 +150,7 @@ where
         on_delta(text.clone(), true).await?;
 
         let usage = extract_usage(&response_body);
-        if let Some(usage) = usage {
-            println!(
-                "OpenRouter usage — prompt: {:?}, completion: {:?}, total: {:?}, cost: {:?}",
-                usage.prompt_tokens, usage.completion_tokens, usage.total_tokens, usage.cost
-            );
-        }
-
-        return Ok(text);
+        return Ok(usage);
     }
 
     Err(anyhow!(
@@ -166,34 +159,34 @@ where
 }
 
 #[derive(Debug)]
-struct Usage {
-    prompt_tokens: u64,
-    completion_tokens: u64,
-    total_tokens: u64,
-    cost: f64,
+pub struct Usage {
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub total_tokens: u64,
+    pub cost: f64,
 }
 
-fn extract_usage(value: &serde_json::Value) -> Option<Usage> {
-    let usage = value.get("usage")?;
+fn extract_usage(value: &serde_json::Value) -> Usage {
+    let usage = value.get("usage").expect("Missing usage");
 
-    Some(Usage {
+    Usage {
         prompt_tokens: usage
             .get("input_tokens")
             .expect("Missing input_tokens")
             .as_u64()
-            .expect(""),
+            .unwrap(),
         completion_tokens: usage
             .get("output_tokens")
             .expect("Missing output_tokens")
             .as_u64()
-            .expect(""),
+            .unwrap(),
         total_tokens: usage
             .get("total_tokens")
             .expect("Missing total_tokens")
             .as_u64()
-            .expect(""),
-        cost: usage.get("cost").expect("Missing cost").as_f64().expect(""),
-    })
+            .unwrap(),
+        cost: usage.get("cost").expect("Missing cost").as_f64().unwrap(),
+    }
 }
 
 fn extract_output_text(value: &serde_json::Value) -> String {
@@ -334,7 +327,7 @@ mod tests {
 
         let captured = buffer.lock().await.clone();
         assert!(
-            !result.trim().is_empty(),
+            result.completion_tokens > 0,
             "LLM response should not be empty"
         );
         assert!(
