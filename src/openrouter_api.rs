@@ -1,5 +1,6 @@
 use crate::conversation::{Message, MessageRole};
-use anyhow::Context;
+use anyhow::{Context, anyhow};
+use log::info;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
@@ -92,6 +93,7 @@ where
         "plugins": [
             { "id": "web" }
         ],
+        "usage": { "include": true },
         "stream": stream,
     })
 }
@@ -125,7 +127,129 @@ where
     F: FnMut(String, bool) -> Fut,
     Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
 {
-    Ok("".to_string())
+    let response = http
+        .post("https://openrouter.ai/api/v1/responses")
+        .bearer_auth(api_key)
+        .json(&payload)
+        .send()
+        .await?;
+
+    let status = response.status();
+    let body_text = response.text().await?;
+
+    if !status.is_success() {
+        return Err(anyhow!(
+            "OpenRouter Responses API error {status}: {body_text}"
+        ));
+    }
+
+    let response_body: serde_json::Value = serde_json::from_str(&body_text)?;
+
+    if let Some(text) = extract_output_text(&response_body) {
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            let owned = trimmed.to_string();
+            on_delta(owned.clone(), true).await?;
+
+            if let Some(usage) = extract_usage(&response_body) {
+                info!(
+                    "OpenRouter usage — prompt: {:?}, completion: {:?}, total: {:?}, cost: {:?}",
+                    usage.prompt_tokens, usage.completion_tokens, usage.total_tokens, usage.cost
+                );
+            }
+
+            return Ok(owned);
+        }
+    }
+
+    Err(anyhow!(
+        "OpenRouter response missing text output: {response_body}"
+    ))
+}
+
+#[derive(Debug)]
+struct Usage {
+    prompt_tokens: u64,
+    completion_tokens: Option<u64>,
+    total_tokens: Option<u64>,
+    cost: Option<f64>,
+}
+
+fn extract_usage(value: &serde_json::Value) -> Option<Usage> {
+    let usage = value.get("usage")?;
+
+    Some(Usage {
+        prompt_tokens: usage
+            .get("prompt_tokens")
+            .expect("prompt_tokens is missing")
+            .as_u64()
+            .expect("prompt_tokens is not a number"),
+        completion_tokens: usage.get("completion_tokens").and_then(|v| v.as_u64()),
+        total_tokens: usage.get("total_tokens").and_then(|v| v.as_u64()),
+        cost: usage.get("cost").and_then(|v| v.as_f64()),
+    })
+}
+
+fn extract_output_text(value: &serde_json::Value) -> Option<String> {
+    // Primary path: Responses API shape (output_text array or output content blocks)
+    if let Some(array) = value.get("output_text").and_then(|v| v.as_array()) {
+        if !array.is_empty() {
+            return Some(
+                array
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            );
+        }
+    }
+
+    if let Some(output) = value.get("output").and_then(|v| v.as_array()) {
+        let mut chunks = Vec::new();
+        for item in output {
+            if let Some(content) = item.get("content").and_then(|v| v.as_array()) {
+                for part in content {
+                    let part_type = part.get("type").and_then(|t| t.as_str());
+                    if part_type == Some("output_text") || part_type == Some("text") {
+                        if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                            chunks.push(text);
+                        }
+                    }
+                }
+            }
+        }
+        if !chunks.is_empty() {
+            return Some(chunks.join("\n"));
+        }
+    }
+
+    // Fallback: OpenAI-compatible chat/completions response
+    if let Some(choices) = value.get("choices").and_then(|v| v.as_array()) {
+        if let Some(choice) = choices.first() {
+            if let Some(msg) = choice.get("message") {
+                if let Some(content) = msg.get("content") {
+                    if let Some(text) = content.as_str() {
+                        return Some(text.to_string());
+                    }
+
+                    if let Some(parts) = content.as_array() {
+                        let mut chunks = Vec::new();
+                        for part in parts {
+                            if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                                chunks.push(text);
+                            }
+                        }
+
+                        if !chunks.is_empty() {
+                            return Some(chunks.join(""));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
 }
 
 fn model_to_summary(model: ModelRecord) -> ModelSummary {
