@@ -59,7 +59,7 @@ fn init_schema(conn: &Connection) -> Result<(), SqliteError> {
             chat_id INTEGER PRIMARY KEY NOT NULL,
             is_authorized BOOLEAN NOT NULL,
             openrouter_api_key  TEXT NOT NULL,
-            developer_prompt    TEXT NOT NULL
+            system_prompt    TEXT NOT NULL
         )",
         [],
     )?;
@@ -86,21 +86,21 @@ pub async fn load_conversation(
         let conversation = {
             // Fetch exactly one chat row; panic if multiple rows are found.
             let mut stmt = conn.prepare(
-                "SELECT is_authorized, openrouter_api_key, developer_prompt \
+                "SELECT is_authorized, openrouter_api_key, system_prompt \
             FROM chats WHERE chat_id = ?1 LIMIT 2",
             )?;
             let mut rows = stmt.query([chat_id.0])?;
 
-            let (is_authorized, openrouter_api_key, developer_prompt) = match rows.next()? {
+            let (is_authorized, openrouter_api_key, system_prompt) = match rows.next()? {
                 Some(row) => {
                     let is_authorized: bool = row.get(0)?;
                     let openrouter_api_key: String = row.get(1)?;
-                    let developer_prompt: String = row.get(2)?;
-                    (is_authorized, openrouter_api_key, developer_prompt)
+                    let system_prompt: String = row.get(2)?;
+                    (is_authorized, openrouter_api_key, system_prompt)
                 }
                 None => {
                     let r = conn.execute(
-                    "INSERT INTO chats (chat_id, is_authorized, openrouter_api_key, developer_prompt) \
+                    "INSERT INTO chats (chat_id, is_authorized, openrouter_api_key, system_prompt) \
                      VALUES (?1, ?2, ?3, ?4)",
                     rusqlite::params![chat_id.0, false, "", ""],
                 )?;
@@ -118,10 +118,10 @@ pub async fn load_conversation(
                 panic!("multiple chat rows found for chat_id {}", chat_id.0);
             }
 
-            let developer_prompt = if !developer_prompt.is_empty() {
+            let system_prompt = if !system_prompt.is_empty() {
                 Some(conversation::Message {
-                    role: MessageRole::Developer,
-                    text: developer_prompt,
+                    role: MessageRole::System,
+                    text: system_prompt,
                     tokens: 0,
                 })
             } else {
@@ -134,7 +134,7 @@ pub async fn load_conversation(
                 prompt_tokens: 0,
                 is_authorized,
                 openai_api_key: openrouter_api_key,
-                developer_prompt,
+                system_prompt,
             }
         };
 

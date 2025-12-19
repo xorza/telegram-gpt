@@ -34,7 +34,7 @@ struct App {
     model: openrouter_api::ModelSummary,
     conversations: Arc<Mutex<HashMap<ChatId, Conversation>>>,
     db: Arc<Mutex<Connection>>,
-    developer_prompt0: conversation::Message,
+    system_prompt0: conversation::Message,
 }
 
 #[tokio::main]
@@ -82,11 +82,11 @@ async fn init() -> anyhow::Result<App, anyhow::Error> {
     let conversations: Arc<Mutex<HashMap<ChatId, Conversation>>> =
         Arc::new(Mutex::new(HashMap::new()));
 
-    let developer_text0 = "Do not output markdown, use plain text.".to_string();
-    let developer_prompt0 = conversation::Message {
-        role: conversation::MessageRole::Developer,
+    let system_text0 = "Do not output markdown, use plain text.".to_string();
+    let system_prompt0 = conversation::Message {
+        role: conversation::MessageRole::System,
         tokens: 0,
-        text: developer_text0,
+        text: system_text0,
     };
 
     log::info!(
@@ -101,7 +101,7 @@ async fn init() -> anyhow::Result<App, anyhow::Error> {
         model,
         conversations,
         db,
-        developer_prompt0,
+        system_prompt0,
     })
 }
 
@@ -139,20 +139,20 @@ impl App {
             return Ok(());
         }
 
-        let developer_prompt_tokens = self.developer_prompt0.tokens
+        let system_prompt_tokens = self.system_prompt0.tokens
             + conversation
-                .developer_prompt
+                .system_prompt
                 .as_ref()
                 .map(|p| p.tokens)
                 .unwrap_or(0);
         let budget = self
             .model
             .context_length
-            .saturating_sub(developer_prompt_tokens + user_message.tokens);
+            .saturating_sub(system_prompt_tokens + user_message.tokens);
         conversation.prune_to_token_budget(budget);
 
-        let history = std::iter::once(&self.developer_prompt0)
-            .chain(conversation.developer_prompt.iter())
+        let history = std::iter::once(&self.system_prompt0)
+            .chain(conversation.system_prompt.iter())
             .chain(conversation.history.iter())
             .chain(std::iter::once(&user_message));
 
