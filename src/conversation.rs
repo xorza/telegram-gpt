@@ -5,7 +5,6 @@ use std::{collections::VecDeque, fmt::Display, sync::Arc};
 pub struct Conversation {
     pub chat_id: u64,
     pub history: VecDeque<Message>,
-    pub prompt_tokens: u64,
     pub is_authorized: bool,
     pub openai_api_key: String,
     pub system_prompt: Option<Message>,
@@ -14,7 +13,6 @@ pub struct Conversation {
 #[derive(Debug, Clone, Default)]
 pub struct Message {
     pub role: MessageRole,
-    pub tokens: u64,
     pub text: String,
 }
 
@@ -28,7 +26,6 @@ pub enum MessageRole {
 
 impl Conversation {
     pub fn add_message(&mut self, message: Message) {
-        // Token count is managed by callers during reconstruction/loading.
         self.history.push_back(message);
     }
 
@@ -37,17 +34,12 @@ impl Conversation {
         I: IntoIterator<Item = Message>,
     {
         for message in messages {
-            self.prompt_tokens += message.tokens;
             self.history.push_back(message);
         }
     }
 
-    pub fn prune_to_token_budget(&mut self, max_prompt_tokens: u64) {
-        while self.prompt_tokens > max_prompt_tokens {
-            if let Some(removed) = self.history.pop_front() {
-                self.prompt_tokens = self.prompt_tokens.saturating_sub(removed.tokens);
-            }
-        }
+    pub fn prune_to_token_budget(&mut self, context_length: u64) {
+        unimplemented!()
     }
 }
 

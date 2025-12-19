@@ -47,7 +47,6 @@ fn init_schema(conn: &Connection) -> Result<(), SqliteError> {
         "CREATE TABLE IF NOT EXISTS history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             chat_id INTEGER NOT NULL,
-            tokens  INTEGER NOT NULL,
             role    INTEGER NOT NULL,
             text    TEXT NOT NULL
         )",
@@ -78,7 +77,7 @@ fn set_schema_version(conn: &Connection, version: i32) -> Result<(), SqliteError
 pub async fn load_conversation(
     db: &Arc<Mutex<Connection>>,
     chat_id: ChatId,
-    max_tokens: u64,
+    context_length: u64,
 ) -> anyhow::Result<Conversation> {
     let (mut conversation, history) = {
         let conn = db.lock().await;
@@ -122,7 +121,6 @@ pub async fn load_conversation(
                 Some(conversation::Message {
                     role: MessageRole::System,
                     text: system_prompt,
-                    tokens: 0,
                 })
             } else {
                 None
@@ -131,7 +129,7 @@ pub async fn load_conversation(
             Conversation {
                 chat_id: chat_id.0 as u64,
                 history: Default::default(),
-                prompt_tokens: 0,
+
                 is_authorized,
                 openai_api_key: openrouter_api_key,
                 system_prompt,
@@ -141,30 +139,25 @@ pub async fn load_conversation(
         let history = {
             // Fetch latest messages first so we can stop once the token budget is exceeded,
             // then restore chronological order for conversation reconstruction.
-            let mut stmt = conn.prepare(
-                "SELECT tokens, role, text FROM history WHERE chat_id = ?1 ORDER BY id DESC",
-            )?;
+            let mut stmt =
+                conn.prepare("SELECT role, text FROM history WHERE chat_id = ?1 ORDER BY id DESC")?;
 
             let rows = stmt.query_map([chat_id.0], |row| {
-                let tokens: u64 = row.get(0)?;
                 let role: u8 = row.get(1)?;
                 let text: String = row.get(2)?;
                 let role = MessageRole::try_from(role).expect("Invalid message role");
 
-                Ok(conversation::Message { role, tokens, text })
+                Ok(conversation::Message { role, text })
             })?;
 
             let mut history: Vec<conversation::Message> = Vec::new();
-            let mut total_tokens: u64 = 0;
 
             for row in rows {
                 if let Ok(message) = row {
                     // Stop before adding a message that would push us over the budget.
-                    if total_tokens + message.tokens > max_tokens {
-                        break;
-                    }
-                    total_tokens += message.tokens;
+
                     history.push(message);
+                    unimplemented!();
                 }
             }
 
@@ -178,8 +171,6 @@ pub async fn load_conversation(
 
     // We collected newest-to-oldest; process oldest-first while respecting the token budget.
     for message in history.into_iter().rev() {
-        conversation.prompt_tokens += message.tokens;
-
         match message.role {
             MessageRole::User => {
                 user_message = Some(message);
@@ -205,10 +196,9 @@ pub async fn load_conversation(
     }
 
     log::info!(
-        "Loaded conversation {} with {} messages and {} tokens",
+        "Loaded conversation {} with {} messages",
         conversation.chat_id,
         conversation.history.len() * 2,
-        conversation.prompt_tokens
     );
 
     Ok(conversation)
@@ -228,8 +218,8 @@ where
 
     for msg in messages {
         tx.execute(
-            "INSERT INTO history (chat_id, tokens, role, text) VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![chat_id.0, msg.tokens as i64, msg.role as u8, msg.text],
+            "INSERT INTO history (chat_id, role, text) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![chat_id.0, msg.role as u8, msg.text],
         )?;
     }
 

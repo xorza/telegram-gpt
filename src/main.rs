@@ -85,7 +85,6 @@ async fn init() -> anyhow::Result<App, anyhow::Error> {
     let system_text0 = "Do not output markdown, use plain text.".to_string();
     let system_prompt0 = conversation::Message {
         role: conversation::MessageRole::System,
-        tokens: 0,
         text: system_text0,
     };
 
@@ -120,7 +119,6 @@ impl App {
         let user_message = conversation::Message {
             role: MessageRole::User,
             text: user_text,
-            tokens: 0,
         };
 
         let typing_indicator = TypingIndicator::new(self.bot.clone(), chat_id);
@@ -139,16 +137,8 @@ impl App {
             return Ok(());
         }
 
-        let system_prompt_tokens = self.system_prompt0.tokens
-            + conversation
-                .system_prompt
-                .as_ref()
-                .map(|p| p.tokens)
-                .unwrap_or(0);
-        let budget = self
-            .model
-            .context_length
-            .saturating_sub(system_prompt_tokens + user_message.tokens);
+        unimplemented!();
+        let budget = self.model.context_length.saturating_sub(0);
         conversation.prune_to_token_budget(budget);
 
         let history = std::iter::once(&self.system_prompt0)
@@ -186,7 +176,6 @@ impl App {
                 let assistant_message = conversation::Message {
                     role: MessageRole::Assistant,
                     text: llm_response.completion_text,
-                    tokens: llm_response.completion_tokens,
                 };
                 let messages = [user_message, assistant_message];
                 self.get_conversation(chat_id)
