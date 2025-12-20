@@ -114,58 +114,23 @@ async fn init() -> App {
 impl App {
     async fn process_message(&self, msg: Message) -> anyhow::Result<()> {
         let chat_id = msg.chat.id;
-        let user_text = match msg.text() {
-            Some(t) => t.to_owned(),
-            None => {
-                self.bot
-                    .send_message(chat_id, "Only text messages are supported.")
-                    .await?;
-                return Ok(());
-            }
-        };
-        let user_message = conversation::Message {
-            role: MessageRole::User,
-            text: user_text,
-        };
-
-        let typing_indicator = TypingIndicator::new(self.bot.clone(), chat_id);
+        let user_message = self.extract_user_message(chat_id, &msg).await?;
 
         log::info!("received message from chat {chat_id}");
 
-        let mut conversation = self.get_conversation(chat_id).await?;
-        if !conversation.is_authorized {
-            log::warn!("Unauthorized user {}", chat_id);
+        let (payload, openai_api_key) = match self.prepare_llm_request(chat_id, &user_message).await
+        {
+            LlmRequest::Unauthorized { message } => {
+                self.bot.send_message(chat_id, &message).await?;
+                return Err(anyhow::anyhow!("Unauthorized"));
+            }
+            LlmRequest::Ready {
+                payload,
+                openai_api_key,
+            } => (payload, openai_api_key),
+        };
 
-            let message = format!(
-                "You are not authorized to use this bot. Chat id {}",
-                chat_id
-            );
-            self.bot.send_message(msg.chat.id, &message).await?;
-            return Ok(());
-        }
-
-        let reserved_tokens = openrouter_api::estimate_tokens([
-            self.system_prompt0.text.as_str(),
-            conversation
-                .system_prompt
-                .as_ref()
-                .map(|s| s.text.as_str())
-                .unwrap_or(""),
-            user_message.text.as_str(),
-        ]);
-
-        let budget = self.model.context_length.saturating_sub(reserved_tokens);
-        conversation.prune_to_token_budget(budget);
-
-        let history = std::iter::once(&self.system_prompt0)
-            .chain(conversation.system_prompt.iter())
-            .chain(conversation.history.iter())
-            .chain(std::iter::once(&user_message));
-
-        let payload = openrouter_api::prepare_payload(&self.model.id, history, STREAM_RESPONSE);
-        let openai_api_key = conversation.openai_api_key.clone();
-
-        drop(conversation);
+        let typing_indicator = TypingIndicator::new(self.bot.clone(), chat_id);
 
         let on_stream_delta = {
             let bot = self.bot.clone();
@@ -194,10 +159,7 @@ impl App {
                     text: llm_response.completion_text,
                 };
                 let messages = [user_message, assistant_message];
-                self.get_conversation(chat_id)
-                    .await?
-                    .add_messages(messages.iter().cloned());
-                db::add_messages(&self.db, chat_id, messages.into_iter()).await;
+                self.persist_messages(chat_id, &messages).await;
             }
             Err(err) => {
                 log::error!("failed to get llm response: {err}");
@@ -214,10 +176,86 @@ impl App {
         Ok(())
     }
 
-    async fn get_conversation(
+    async fn extract_user_message(
         &self,
         chat_id: ChatId,
-    ) -> anyhow::Result<MappedMutexGuard<'_, Conversation>> {
+        msg: &Message,
+    ) -> anyhow::Result<conversation::Message> {
+        let user_text = match msg.text() {
+            Some(t) => t.to_owned(),
+            None => {
+                self.bot
+                    .send_message(chat_id, "Only text messages are supported.")
+                    .await?;
+                return Err(anyhow::anyhow!("Only text messages are supported."));
+            }
+        };
+
+        Ok(conversation::Message {
+            role: MessageRole::User,
+            text: user_text,
+        })
+    }
+
+    async fn prepare_llm_request(
+        &self,
+        chat_id: ChatId,
+        user_message: &conversation::Message,
+    ) -> LlmRequest {
+        let mut conversation = self.get_conversation(chat_id).await;
+        if !conversation.is_authorized {
+            log::warn!("Unauthorized user {}", chat_id);
+
+            let message = format!(
+                "You are not authorized to use this bot. Chat id {}",
+                chat_id
+            );
+            return LlmRequest::Unauthorized { message };
+        }
+
+        let reserved_tokens = openrouter_api::estimate_tokens([
+            self.system_prompt0.text.as_str(),
+            conversation
+                .system_prompt
+                .as_ref()
+                .map(|s| s.text.as_str())
+                .unwrap_or(""),
+            user_message.text.as_str(),
+        ]);
+
+        let budget = self.model.context_length.saturating_sub(reserved_tokens);
+        conversation.prune_to_token_budget(budget);
+
+        let mut history = Vec::new();
+        history.push(self.system_prompt0.clone());
+        if let Some(system_prompt) = conversation.system_prompt.as_ref() {
+            history.push(system_prompt.clone());
+        }
+        history.extend(conversation.history.iter().cloned());
+        history.push(user_message.clone());
+
+        let openai_api_key = conversation.openai_api_key.clone();
+        drop(conversation);
+
+        let payload =
+            openrouter_api::prepare_payload(&self.model.id, history.iter(), STREAM_RESPONSE);
+
+        LlmRequest::Ready {
+            payload,
+            openai_api_key,
+        }
+    }
+
+    async fn persist_messages(&self, chat_id: ChatId, messages: &[conversation::Message]) {
+        {
+            let mut conversation = self.get_conversation(chat_id).await;
+            conversation.add_messages(messages.iter().cloned());
+        }
+
+        db::add_messages(&self.db, chat_id, messages.iter().cloned()).await;
+    }
+
+    async fn get_conversation(&self, chat_id: ChatId) -> MappedMutexGuard<'_, Conversation> {
         let mut conv_map = self.conversations.lock().await;
 
         if let std::collections::hash_map::Entry::Vacant(entry) = conv_map.entry(chat_id) {
@@ -225,10 +263,20 @@ impl App {
             entry.insert(conv);
         }
 
-        Ok(MutexGuard::map(conv_map, |map| {
+        MutexGuard::map(conv_map, |map| {
             map.get_mut(&chat_id).expect("conversation must exist")
-        }))
+        })
     }
+}
+
+enum LlmRequest {
+    Unauthorized {
+        message: String,
+    },
+    Ready {
+        payload: serde_json::Value,
+        openai_api_key: String,
+    },
 }
 
 async fn handle_stream_delta(
