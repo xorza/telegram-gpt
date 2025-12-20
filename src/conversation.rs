@@ -43,7 +43,11 @@ impl Conversation {
     }
 
     pub fn prune_to_token_budget(&mut self, token_budget: u64) {
-        assert!(token_budget > 0, "Token budget must be greater than zero");
+        // If no budget remains, drop all stored history so the request can proceed.
+        if token_budget == 0 {
+            self.history.clear();
+            return;
+        }
 
         let mut estimated_tokens =
             openrouter_api::estimate_tokens(self.history.iter().map(|m| m.text.as_str()));

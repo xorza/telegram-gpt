@@ -153,7 +153,7 @@ impl App {
         let chat_id = msg.chat.id;
         let user_message = self.extract_user_message(chat_id, &msg).await?;
 
-        log::info!("received message from chat {chat_id}");
+        log::info!("received message from chat {}", chat_id);
 
         let (payload, openai_api_key) = match self.prepare_llm_request(chat_id, &user_message).await
         {
