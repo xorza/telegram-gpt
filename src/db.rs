@@ -143,26 +143,25 @@ pub async fn load_conversation(
             let mut stmt =
                 conn.prepare("SELECT role, text FROM history WHERE chat_id = ?1 ORDER BY id DESC")?;
 
-            let rows = stmt.query_map([chat_id.0], |row| {
-                let role: u8 = row.get(0)?;
-                let text: String = row.get(1)?;
-                let role = MessageRole::try_from(role).expect("Invalid message role");
+            let rows = stmt
+                .query_map([chat_id.0], |row| {
+                    let role: u8 = row.get(0)?;
+                    let text: String = row.get(1)?;
+                    let role = MessageRole::try_from(role).expect("Invalid message role");
 
-                Ok(conversation::Message { role, text })
-            })?;
+                    Ok(conversation::Message { role, text })
+                })?
+                .filter_map(|message| message.ok());
 
             let mut history: Vec<conversation::Message> = Vec::new();
 
-            for row in rows {
-                if let Ok(message) = row {
-                    // Stop before adding a message that would push us over the budget.
-                    let estimated_tokens =
-                        openrouter_api::estimate_tokens(history.iter().map(|m| m.text.as_str()));
-                    if estimated_tokens > token_budget {
-                        break;
-                    }
+            for message in rows {
+                history.push(message);
 
-                    history.push(message);
+                let estimated_tokens =
+                    openrouter_api::estimate_tokens(history.iter().map(|m| m.text.as_str()));
+                if estimated_tokens > token_budget {
+                    break;
                 }
             }
 
