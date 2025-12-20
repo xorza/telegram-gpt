@@ -147,7 +147,7 @@ impl App {
 
         let (payload, openai_api_key) = match self.prepare_llm_request(chat_id, &user_message).await
         {
-            Ok(ready) => (ready.payload, ready.openai_api_key),
+            Ok(ready) => (ready.payload, ready.openrouter_api_key),
             Err(LlmRequestError::Unauthorized) => {
                 let message = format!(
                     "You are not authorized to use this bot. Chat id {}",
@@ -273,7 +273,7 @@ impl App {
 
         Ok(LlmRequestReady {
             payload,
-            openai_api_key,
+            openrouter_api_key: openai_api_key,
         })
     }
 
@@ -307,9 +307,10 @@ impl App {
             db::load_history(&self.db, &mut conversation, model.token_budget()).await;
 
             log::info!(
-                "Loaded conversation {} with {} messages",
+                "Loaded conversation {} with {} messages. Model id is {}",
                 conversation.chat_id,
                 conversation.history.len(),
+                model.id
             );
 
             entry.insert(conversation);
@@ -325,7 +326,7 @@ impl App {
 #[derive(Debug)]
 struct LlmRequestReady {
     payload: serde_json::Value,
-    openai_api_key: String,
+    openrouter_api_key: String,
 }
 
 #[derive(Debug)]
