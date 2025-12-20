@@ -144,8 +144,8 @@ pub async fn load_conversation(
                 conn.prepare("SELECT role, text FROM history WHERE chat_id = ?1 ORDER BY id DESC")?;
 
             let rows = stmt.query_map([chat_id.0], |row| {
-                let role: u8 = row.get(1)?;
-                let text: String = row.get(2)?;
+                let role: u8 = row.get(0)?;
+                let text: String = row.get(1)?;
                 let role = MessageRole::try_from(role).expect("Invalid message role");
 
                 Ok(conversation::Message { role, text })
@@ -172,16 +172,13 @@ pub async fn load_conversation(
         (conversation, history)
     };
 
-    let mut user_message: Option<conversation::Message> = None;
-
     // We collected newest-to-oldest; process oldest-first while respecting the token budget.
     for message in history.into_iter().rev() {
         match message.role {
             MessageRole::User => {
-                user_message = Some(message);
+                conversation.add_message(message);
             }
             MessageRole::Assistant => {
-                conversation.add_message(user_message.take().expect("Missing user message"));
                 conversation.add_message(message);
             }
             _ => {
@@ -189,15 +186,6 @@ pub async fn load_conversation(
                 panic!("Invalid message role");
             }
         }
-    }
-
-    if user_message.is_some() {
-        let error = format!(
-            "Dropping trailing user message without assistant response for chat {}",
-            chat_id
-        );
-        log::error!("{}", error);
-        panic!("{}", error)
     }
 
     log::info!(
