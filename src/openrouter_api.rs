@@ -191,13 +191,13 @@ where
 fn extract_output_text(value: &serde_json::Value) -> Response {
     let text = value
         .get("output")
-        .expect("")
-        .as_array()
-        .expect("")
+        .and_then(|v| v.as_array())
         .into_iter()
-        .flat_map(|v| v.get("content").expect("").as_array().expect(""))
-        .map(|v| v.get("text").expect("").to_string())
-        .collect::<Vec<String>>()
+        .flatten()
+        .filter_map(|v| v.get("content").and_then(|c| c.as_array()))
+        .flatten()
+        .filter_map(|v| v.get("text").and_then(|t| t.as_str()))
+        .collect::<Vec<&str>>()
         .join("\n")
         .trim()
         .to_string();
@@ -207,20 +207,20 @@ fn extract_output_text(value: &serde_json::Value) -> Response {
     Response {
         prompt_tokens: usage
             .get("input_tokens")
-            .expect("Missing input_tokens")
-            .as_u64()
-            .unwrap(),
+            .and_then(|v| v.as_u64())
+            .expect("Missing input_tokens"),
         completion_tokens: usage
             .get("output_tokens")
-            .expect("Missing output_tokens")
-            .as_u64()
-            .unwrap(),
+            .and_then(|v| v.as_u64())
+            .expect("Missing output_tokens"),
         total_tokens: usage
             .get("total_tokens")
-            .expect("Missing total_tokens")
-            .as_u64()
-            .unwrap(),
-        cost: usage.get("cost").expect("Missing cost").as_f64().unwrap(),
+            .and_then(|v| v.as_u64())
+            .expect("Missing total_tokens"),
+        cost: usage
+            .get("cost")
+            .and_then(|v| v.as_f64())
+            .expect("Missing cost"),
         completion_text: text,
     }
 }
