@@ -22,7 +22,7 @@ use teloxide::{
     prelude::*,
     types::{ChatId, MessageId, ReactionType},
 };
-use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard};
+use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard, RwLock};
 use typing::TypingIndicator;
 
 const DEFAULT_MODEL: &str = "xiaomi/mimo-v2-flash:free";
@@ -34,6 +34,7 @@ struct App {
     bot: Bot,
     http_client: Arc<reqwest::Client>,
     model: openrouter_api::ModelSummary,
+    models: Arc<RwLock<Vec<openrouter_api::ModelSummary>>>,
     conversations: Arc<Mutex<HashMap<ChatId, Conversation>>>,
     db: Arc<Mutex<Connection>>,
     system_prompt0: conversation::Message,
@@ -84,6 +85,16 @@ async fn init() -> App {
         .await
         .expect("failed to load model");
 
+    let models = match openrouter_api::list_models(&http_client).await {
+        Ok(models) => models,
+        Err(err) => {
+            log::warn!("failed to load model list: {err}");
+            Vec::new()
+        }
+    };
+    let models = Arc::new(RwLock::new(models));
+    spawn_model_refresh(models.clone(), http_client.clone());
+
     let db = Arc::new(Mutex::new(db::init_db()));
 
     let conversations: Arc<Mutex<HashMap<ChatId, Conversation>>> =
@@ -105,10 +116,32 @@ async fn init() -> App {
         bot,
         http_client,
         model,
+        models,
         conversations,
         db,
         system_prompt0,
     }
+}
+
+fn spawn_model_refresh(
+    models: Arc<RwLock<Vec<openrouter_api::ModelSummary>>>,
+    http_client: Arc<reqwest::Client>,
+) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(10 * 60));
+        loop {
+            interval.tick().await;
+            match openrouter_api::list_models(&http_client).await {
+                Ok(latest) => {
+                    let mut guard = models.write().await;
+                    *guard = latest;
+                }
+                Err(err) => {
+                    log::warn!("failed to refresh model list: {err}");
+                }
+            }
+        }
+    });
 }
 
 impl App {
