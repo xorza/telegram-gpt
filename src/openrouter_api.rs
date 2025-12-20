@@ -64,6 +64,13 @@ pub struct Response {
     pub completion_text: String,
 }
 
+impl ModelSummary {
+    pub fn token_budget(&self) -> u64 {
+        self.context_length
+            .saturating_sub(self.max_completion_tokens)
+    }
+}
+
 pub fn estimate_tokens<'a, I>(messages: I) -> u64
 where
     I: IntoIterator<Item = &'a str>,

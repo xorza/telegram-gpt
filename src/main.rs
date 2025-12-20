@@ -253,10 +253,7 @@ impl App {
             user_message.text.as_str(),
         ]);
 
-        let budget = model
-            .context_length
-            .saturating_sub(reserved_tokens + model.max_completion_tokens);
-        conversation.prune_to_token_budget(budget);
+        conversation.prune_to_token_budget(model.token_budget().saturating_sub(reserved_tokens));
 
         let mut history = Vec::new();
         history.push(self.system_prompt0.clone());
@@ -304,15 +301,10 @@ impl App {
         let mut conv_map = self.conversations.lock().await;
 
         if let std::collections::hash_map::Entry::Vacant(entry) = conv_map.entry(chat_id) {
-            // Populate the cache on first access.
             let mut conversation = db::load_conversation(&self.db, chat_id).await;
             let model = self.resolve_model(conversation.model_id.as_deref()).await;
 
-            let token_budget = model
-                .context_length
-                .saturating_sub(model.max_completion_tokens);
-
-            db::load_history(&self.db, &mut conversation, token_budget).await;
+            db::load_history(&self.db, &mut conversation, model.token_budget()).await;
 
             log::info!(
                 "Loaded conversation {} with {} messages",
