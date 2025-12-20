@@ -250,7 +250,10 @@ impl App {
             user_message.text.as_str(),
         ]);
 
-        let budget = self.model.context_length.saturating_sub(reserved_tokens);
+        let budget = self
+            .model
+            .context_length
+            .saturating_sub(reserved_tokens + self.model.max_completion_tokens);
         conversation.prune_to_token_budget(budget);
 
         let mut history = Vec::new();
@@ -286,7 +289,14 @@ impl App {
         let mut conv_map = self.conversations.lock().await;
 
         if let std::collections::hash_map::Entry::Vacant(entry) = conv_map.entry(chat_id) {
-            let conv = db::load_conversation(&self.db, chat_id, self.model.context_length).await;
+            let conv = db::load_conversation(
+                &self.db,
+                chat_id,
+                self.model
+                    .context_length
+                    .saturating_sub(self.model.max_completion_tokens),
+            )
+            .await;
             entry.insert(conv);
         }
 
