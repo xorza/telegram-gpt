@@ -291,7 +291,7 @@ mod tests {
                 "context_length": 8192,
                 "max_completion_tokens": 4096,
                 "is_moderated": true
-              },
+              }
             }
           ]
         }"#;
