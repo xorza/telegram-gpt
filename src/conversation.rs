@@ -9,6 +9,7 @@ pub struct Conversation {
     pub history: VecDeque<Message>,
     pub is_authorized: bool,
     pub openrouter_api_key: Option<String>,
+    pub model_id: Option<String>,
     pub system_prompt: Option<Message>,
 }
 

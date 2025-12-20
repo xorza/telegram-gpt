@@ -33,7 +33,6 @@ const STREAM_RESPONSE: bool = false;
 struct App {
     bot: Bot,
     http_client: reqwest::Client,
-    model: openrouter_api::ModelSummary,
     models: Arc<RwLock<Vec<openrouter_api::ModelSummary>>>,
     conversations: Arc<Mutex<HashMap<ChatId, Conversation>>>,
     db: Arc<Mutex<Connection>>,
@@ -80,33 +79,21 @@ async fn init() -> App {
 
     let bot = Bot::from_env();
     let http_client = reqwest::Client::new();
-    let model_id = std::env::var("OPENROUTER_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
-    let model = openrouter_api::model(&http_client, &model_id)
-        .await
-        .expect("failed to load model");
     let models = spawn_model_refresh(http_client.clone()).await;
-
     let db = Arc::new(Mutex::new(db::init_db()));
-
     let conversations: Arc<Mutex<HashMap<ChatId, Conversation>>> =
         Arc::new(Mutex::new(HashMap::new()));
-
     let system_text0 = "Do not output markdown, use plain text.".to_string();
     let system_prompt0 = conversation::Message {
         role: conversation::MessageRole::System,
         text: system_text0,
     };
 
-    log::info!(
-        "starting tggpt bot with model: {}, max prompt tokens: {}",
-        model.id,
-        model.context_length
-    );
+    log::info!("starting tggpt bot");
 
     App {
         bot,
         http_client,
-        model,
         models,
         conversations,
         db,
@@ -254,6 +241,8 @@ impl App {
             return Err(LlmRequestError::Unauthorized);
         }
 
+        let model = self.resolve_model(conversation.model_id.as_deref()).await;
+
         let reserved_tokens = openrouter_api::estimate_tokens([
             self.system_prompt0.text.as_str(),
             conversation
@@ -264,10 +253,9 @@ impl App {
             user_message.text.as_str(),
         ]);
 
-        let budget = self
-            .model
+        let budget = model
             .context_length
-            .saturating_sub(reserved_tokens + self.model.max_completion_tokens);
+            .saturating_sub(reserved_tokens + model.max_completion_tokens);
         conversation.prune_to_token_budget(budget);
 
         let mut history = Vec::new();
@@ -284,13 +272,23 @@ impl App {
         };
         drop(conversation);
 
-        let payload =
-            openrouter_api::prepare_payload(&self.model.id, history.iter(), STREAM_RESPONSE);
+        let payload = openrouter_api::prepare_payload(&model.id, history.iter(), STREAM_RESPONSE);
 
         Ok(LlmRequestReady {
             payload,
             openai_api_key,
         })
+    }
+
+    async fn resolve_model(&self, model_id: Option<&str>) -> openrouter_api::ModelSummary {
+        let requested = model_id.unwrap_or(DEFAULT_MODEL);
+        let models = self.models.read().await;
+        models
+            .iter()
+            .find(|m| m.id == requested)
+            .cloned()
+            .or_else(|| models.iter().find(|m| m.id == DEFAULT_MODEL).cloned())
+            .expect("default model not found")
     }
 
     async fn persist_messages(&self, chat_id: ChatId, messages: &[conversation::Message]) {
@@ -306,19 +304,28 @@ impl App {
         let mut conv_map = self.conversations.lock().await;
 
         if let std::collections::hash_map::Entry::Vacant(entry) = conv_map.entry(chat_id) {
-            let conv = db::load_conversation(
-                &self.db,
-                chat_id,
-                self.model
-                    .context_length
-                    .saturating_sub(self.model.max_completion_tokens),
-            )
-            .await;
-            entry.insert(conv);
+            // Populate the cache on first access.
+            let mut conversation = db::load_conversation(&self.db, chat_id).await;
+            let model = self.resolve_model(conversation.model_id.as_deref()).await;
+
+            let token_budget = model
+                .context_length
+                .saturating_sub(model.max_completion_tokens);
+
+            db::load_history(&self.db, &mut conversation, token_budget).await;
+
+            log::info!(
+                "Loaded conversation {} with {} messages",
+                conversation.chat_id,
+                conversation.history.len(),
+            );
+
+            entry.insert(conversation);
         }
 
         MutexGuard::map(conv_map, |map| {
-            map.get_mut(&chat_id).expect("conversation must exist")
+            map.get_mut(&chat_id)
+                .expect("conversation entry just inserted or already existed")
         })
     }
 }

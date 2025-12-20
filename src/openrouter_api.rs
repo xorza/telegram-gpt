@@ -104,16 +104,6 @@ pub async fn list_models(http: &Client) -> anyhow::Result<Vec<ModelSummary>> {
     Ok(parsed.data.into_iter().map(model_to_summary).collect())
 }
 
-pub async fn model(http: &Client, model: &str) -> anyhow::Result<ModelSummary> {
-    let models = list_models(http).await?;
-    let model = models
-        .into_iter()
-        .find(|m| m.id == model)
-        .ok_or_else(|| anyhow::anyhow!("model not found"))?;
-
-    Ok(model)
-}
-
 #[allow(dead_code)]
 pub fn prepare_payload<'a, I>(model: &str, messages: I, stream: bool) -> serde_json::Value
 where

@@ -81,36 +81,32 @@ fn set_schema_version(conn: &Connection, version: i32) {
         .expect("failed to set schema version");
 }
 
-pub async fn load_conversation(
-    db: &Arc<Mutex<Connection>>,
-    chat_id: ChatId,
-    token_budget: u64,
-) -> Conversation {
-    let (mut conversation, history) = {
-        let conn = db.lock().await;
+pub async fn load_conversation(db: &Arc<Mutex<Connection>>, chat_id: ChatId) -> Conversation {
+    let conn = db.lock().await;
 
-        let conversation = {
-            // Fetch exactly one chat row; panic if multiple rows are found.
-            let (is_authorized, openrouter_api_key, system_prompt) = conn
+    // Fetch exactly one chat row; panic if multiple rows are found.
+    let (is_authorized, openrouter_api_key, model_id, system_prompt) = conn
                 .query_row(
-                    "SELECT is_authorized, openrouter_api_key, system_prompt FROM chats WHERE chat_id = ?1",
+                    "SELECT is_authorized, openrouter_api_key, model_id, system_prompt FROM chats WHERE chat_id = ?1",
                     [chat_id.0],
                     |row| {
                         Ok((
                             row.get::<_, bool>(0)?,
                             row.get::<_, Option<String>>(1)?,
                             row.get::<_, Option<String>>(2)?,
+                            row.get::<_, Option<String>>(3)?,
                         ))
                     },
                 )
                 .or_else(|err| {
                     if matches!(err, rusqlite::Error::QueryReturnedNoRows) {
                         let r = conn.execute(
-                            "INSERT INTO chats (chat_id, is_authorized, openrouter_api_key, system_prompt) \
-                            VALUES (?1, ?2, ?3, ?4)",
+                            "INSERT INTO chats (chat_id, is_authorized, openrouter_api_key, model_id, system_prompt) \
+                            VALUES (?1, ?2, ?3, ?4, ?5)",
                             rusqlite::params![
                                 chat_id.0,
                                 false,
+                                Option::<String>::None,
                                 Option::<String>::None,
                                 Option::<String>::None
                             ],
@@ -121,87 +117,64 @@ pub async fn load_conversation(
                                 chat_id.0
                             ));
                         }
-                        Ok((false, None, None))
+                        Ok((false, None, None, None))
                     } else {
                         Err(err)
                     }
                 })
                 .expect("failed to fetch chat row");
 
-            let system_prompt =
-                system_prompt
-                    .filter(|s| !s.is_empty())
-                    .map(|text| conversation::Message {
-                        role: MessageRole::System,
-                        text,
-                    });
+    let system_prompt = system_prompt
+        .filter(|s| !s.is_empty())
+        .map(|text| conversation::Message {
+            role: MessageRole::System,
+            text,
+        });
 
-            Conversation {
-                chat_id: chat_id.0 as u64,
-                history: Default::default(),
-                is_authorized,
-                openrouter_api_key,
-                system_prompt,
-            }
-        };
+    Conversation {
+        chat_id: chat_id.0 as u64,
+        history: Default::default(),
+        is_authorized,
+        openrouter_api_key,
+        model_id,
+        system_prompt,
+    }
+}
 
-        let history = {
-            // Fetch latest messages first so we can stop once the token budget is exceeded,
-            // then restore chronological order for conversation reconstruction.
-            let mut stmt = conn
-                .prepare("SELECT role, text FROM history WHERE chat_id = ?1 ORDER BY id DESC")
-                .expect("failed to prepare history lookup statement");
+pub async fn load_history(
+    db: &Arc<Mutex<Connection>>,
+    conversation: &mut Conversation,
+    token_budget: u64,
+) {
+    conversation.history.clear();
 
-            let mut history: Vec<conversation::Message> = Vec::new();
+    let conn = db.lock().await;
 
-            let rows = stmt
-                .query_map([chat_id.0], |row| {
-                    let role: u8 = row.get(0)?;
-                    let text: String = row.get(1)?;
-                    let role = MessageRole::try_from(role).expect("Invalid message role");
+    // Fetch latest messages first so we can stop once the token budget is exceeded,
+    // then restore chronological order for conversation reconstruction.
+    let mut stmt = conn
+        .prepare("SELECT role, text FROM history WHERE chat_id = ?1 ORDER BY id DESC")
+        .expect("failed to prepare history lookup statement");
 
-                    Ok(conversation::Message { role, text })
-                })
-                .expect("failed to query history rows")
-                .filter_map(|row| row.ok());
-            for message in rows {
-                history.push(message);
+    let rows = stmt
+        .query_map([conversation.chat_id], |row| {
+            let role: u8 = row.get(0)?;
+            let text: String = row.get(1)?;
+            let role = MessageRole::try_from(role).expect("invalid message role");
 
-                let estimated_tokens =
-                    openrouter_api::estimate_tokens(history.iter().map(|m| m.text.as_str()));
-                if estimated_tokens > token_budget {
-                    break;
-                }
-            }
+            Ok(conversation::Message { role, text })
+        })
+        .expect("failed to query history rows")
+        .filter_map(|row| row.ok());
+    for message in rows {
+        conversation.history.push_back(message);
 
-            history
-        };
-
-        (conversation, history)
-    };
-
-    // We collected newest-to-oldest; process oldest-first while respecting the token budget.
-    for message in history.into_iter().rev() {
-        match message.role {
-            MessageRole::User => {
-                conversation.add_message(message);
-            }
-            MessageRole::Assistant => {
-                conversation.add_message(message);
-            }
-            _ => {
-                fatal_panic(format!("Invalid message role in DB for chat {}", chat_id));
-            }
+        let estimated_tokens =
+            openrouter_api::estimate_tokens(conversation.history.iter().map(|m| m.text.as_str()));
+        if estimated_tokens > token_budget {
+            break;
         }
     }
-
-    log::info!(
-        "Loaded conversation {} with {} messages",
-        conversation.chat_id,
-        conversation.history.len(),
-    );
-
-    conversation
 }
 
 pub async fn add_messages<I>(db: &Arc<Mutex<Connection>>, chat_id: ChatId, messages: I)
