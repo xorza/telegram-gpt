@@ -8,7 +8,7 @@ pub struct Conversation {
     pub chat_id: u64,
     pub history: VecDeque<Message>,
     pub is_authorized: bool,
-    pub openai_api_key: String,
+    pub openrouter_api_key: Option<String>,
     pub system_prompt: Option<Message>,
 }
 

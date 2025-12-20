@@ -7,7 +7,7 @@ use std::sync::Arc;
 use teloxide::types::ChatId;
 use tokio::sync::Mutex;
 
-const SCHEMA_VERSION: i32 = 1;
+const SCHEMA_VERSION: i32 = 2;
 
 pub fn init_db() -> Connection {
     let db_path = std::env::var("SQLITE_PATH").unwrap_or_else(|_| "data/db.sqlite".to_string());
@@ -62,8 +62,8 @@ fn init_schema(conn: &Connection) {
         "CREATE TABLE IF NOT EXISTS chats (
             chat_id INTEGER PRIMARY KEY NOT NULL,
             is_authorized BOOLEAN NOT NULL,
-            openrouter_api_key  TEXT NOT NULL,
-            system_prompt    TEXT NOT NULL
+            openrouter_api_key  TEXT,
+            system_prompt    TEXT
         )",
         [],
     )
@@ -92,8 +92,7 @@ pub async fn load_conversation(
             // Fetch exactly one chat row; panic if multiple rows are found.
             let mut stmt = conn
                 .prepare(
-                    "SELECT is_authorized, openrouter_api_key, system_prompt \
-            FROM chats WHERE chat_id = ?1 LIMIT 2",
+                    "SELECT is_authorized, openrouter_api_key, system_prompt FROM chats WHERE chat_id = ?1 LIMIT 2",
                 )
                 .expect("failed to prepare chat lookup statement");
             let mut rows = stmt.query([chat_id.0]).expect("failed to query chat row");
@@ -104,16 +103,22 @@ pub async fn load_conversation(
             {
                 Some(row) => {
                     let is_authorized: bool = row.get(0).expect("failed to get is_authorized");
-                    let openrouter_api_key: String =
+                    let openrouter_api_key: Option<String> =
                         row.get(1).expect("failed to get openrouter_api_key");
-                    let system_prompt: String = row.get(2).expect("failed to get system_prompt");
+                    let system_prompt: Option<String> =
+                        row.get(2).expect("failed to get system_prompt");
                     (is_authorized, openrouter_api_key, system_prompt)
                 }
                 None => {
                     let r = conn.execute(
                         "INSERT INTO chats (chat_id, is_authorized, openrouter_api_key, system_prompt) \
                         VALUES (?1, ?2, ?3, ?4)",
-                        rusqlite::params![chat_id.0, false, "", ""],
+                        rusqlite::params![
+                            chat_id.0,
+                            false,
+                            Option::<String>::None,
+                            Option::<String>::None
+                        ],
                     ).expect("failed to insert chat row");
                     if r != 1 {
                         fatal_panic(format!(
@@ -122,25 +127,23 @@ pub async fn load_conversation(
                         ));
                     }
 
-                    (false, String::new(), String::new())
+                    (false, None, None)
                 }
             };
 
-            let system_prompt = if !system_prompt.is_empty() {
-                Some(conversation::Message {
-                    role: MessageRole::System,
-                    text: system_prompt,
-                })
-            } else {
-                None
-            };
+            let system_prompt =
+                system_prompt
+                    .filter(|s| !s.is_empty())
+                    .map(|text| conversation::Message {
+                        role: MessageRole::System,
+                        text,
+                    });
 
             Conversation {
                 chat_id: chat_id.0 as u64,
                 history: Default::default(),
-
                 is_authorized,
-                openai_api_key: openrouter_api_key,
+                openrouter_api_key,
                 system_prompt,
             }
         };

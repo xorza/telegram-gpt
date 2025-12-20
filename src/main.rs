@@ -160,9 +160,18 @@ impl App {
 
         let (payload, openai_api_key) = match self.prepare_llm_request(chat_id, &user_message).await
         {
-            LlmRequest::Unauthorized { message } => {
+            LlmRequest::Unauthorized => {
+                let message = format!(
+                    "You are not authorized to use this bot. Chat id {}",
+                    chat_id
+                );
                 self.bot.send_message(chat_id, &message).await?;
                 return Err(anyhow::anyhow!("Unauthorized"));
+            }
+            LlmRequest::NoApiKeyProvided => {
+                let message = format!("No API key provided for chat id {}", chat_id);
+                self.bot.send_message(chat_id, &message).await?;
+                return Err(anyhow::anyhow!("No API key provided"));
             }
             LlmRequest::Ready {
                 payload,
@@ -246,11 +255,7 @@ impl App {
         if !conversation.is_authorized {
             log::warn!("Unauthorized user {}", chat_id);
 
-            let message = format!(
-                "You are not authorized to use this bot. Chat id {}",
-                chat_id
-            );
-            return LlmRequest::Unauthorized { message };
+            return LlmRequest::Unauthorized;
         }
 
         let reserved_tokens = openrouter_api::estimate_tokens([
@@ -277,7 +282,12 @@ impl App {
         history.extend(conversation.history.iter().cloned());
         history.push(user_message.clone());
 
-        let openai_api_key = conversation.openai_api_key.clone();
+        if conversation.openrouter_api_key.is_none() {
+            log::warn!("No API key provided for chat id {}", chat_id);
+            return LlmRequest::NoApiKeyProvided;
+        }
+
+        let openai_api_key = conversation.openrouter_api_key.clone().unwrap();
         drop(conversation);
 
         let payload =
@@ -320,9 +330,8 @@ impl App {
 }
 
 enum LlmRequest {
-    Unauthorized {
-        message: String,
-    },
+    Unauthorized,
+    NoApiKeyProvided,
     Ready {
         payload: serde_json::Value,
         openai_api_key: String,
