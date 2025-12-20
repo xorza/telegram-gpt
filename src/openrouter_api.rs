@@ -314,7 +314,6 @@ mod tests {
 
         let user_message = Message {
             role: MessageRole::User,
-            tokens: 0,
             text: "Say hello in one short sentence.".to_string(),
         };
 
