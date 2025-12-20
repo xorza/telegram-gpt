@@ -124,10 +124,6 @@ pub async fn load_conversation(
                 }
             };
 
-            if rows.next().ok().is_some() {
-                panic!("multiple chat rows found for chat_id {}", chat_id.0);
-            }
-
             let system_prompt = if !system_prompt.is_empty() {
                 Some(conversation::Message {
                     role: MessageRole::System,
