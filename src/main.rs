@@ -4,6 +4,7 @@
 mod conversation;
 mod db;
 mod openrouter_api;
+mod panic_handler;
 mod typing;
 
 use anyhow::{Context, anyhow};
@@ -39,7 +40,7 @@ struct App {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() {
     let app = init().await;
 
     teloxide::repl(app.bot.clone(), move |_bot: Bot, msg: Message| {
@@ -55,16 +56,11 @@ async fn main() -> anyhow::Result<()> {
         }
     })
     .await;
-
-    Ok(())
 }
 
 async fn init() -> App {
-    // Abort the process on any panic, including panics inside spawned Tokio tasks.
-    std::panic::set_hook(Box::new(|info| {
-        log::error!("panic: {info}");
-        std::process::abort();
-    }));
+    // Ensure all panics are logged once and exit cleanly.
+    panic_handler::set_panic_hook();
 
     dotenv::dotenv().ok();
 

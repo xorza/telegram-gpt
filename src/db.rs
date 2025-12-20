@@ -1,5 +1,6 @@
 use crate::conversation::{self, Conversation, Message, MessageRole};
 use crate::openrouter_api;
+use crate::panic_handler::fatal_panic;
 use anyhow::Result;
 use rusqlite::{Connection, Error as SqliteError};
 use std::sync::Arc;
@@ -34,10 +35,10 @@ pub fn init_db() -> Connection {
         set_schema_version(&conn, SCHEMA_VERSION);
         log::info!("Initialized database schema version {}", SCHEMA_VERSION);
     } else if version != SCHEMA_VERSION {
-        panic!(
+        fatal_panic(format!(
             "Unsupported database schema version {} (expected {})",
             version, SCHEMA_VERSION
-        );
+        ));
     } else {
         log::info!("Database schema version {} detected", version);
     }
@@ -115,9 +116,10 @@ pub async fn load_conversation(
                         rusqlite::params![chat_id.0, false, "", ""],
                     ).expect("failed to insert chat row");
                     if r != 1 {
-                        let error = format!("failed to insert chat row for chat_id {}", chat_id.0);
-                        log::error!("{}", error);
-                        panic!("{}", error);
+                        fatal_panic(format!(
+                            "failed to insert chat row for chat_id {}",
+                            chat_id.0
+                        ));
                     }
 
                     (false, String::new(), String::new())
@@ -188,8 +190,7 @@ pub async fn load_conversation(
                 conversation.add_message(message);
             }
             _ => {
-                log::error!("Invalid message role in DB for chat {}", chat_id);
-                panic!("Invalid message role");
+                fatal_panic(format!("Invalid message role in DB for chat {}", chat_id));
             }
         }
     }
