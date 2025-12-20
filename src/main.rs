@@ -110,20 +110,30 @@ async fn spawn_model_refresh(
     async fn refresh_models(
         http_client: &reqwest::Client,
         models: &Arc<RwLock<Vec<openrouter_api::ModelSummary>>>,
-    ) {
-        match openrouter_api::list_models(http_client).await {
-            Ok(latest) => {
-                let mut guard = models.write().await;
-                *guard = latest;
-            }
+    ) -> anyhow::Result<()> {
+        let latest = openrouter_api::list_models(http_client).await?;
+
+        let mut guard = models.write().await;
+        *guard = latest;
+
+        Ok(())
+    }
+
+    // Run once immediately; keep retrying so we always start with a model list.
+    let mut attempt = 1u32;
+    loop {
+        match refresh_models(&http_client, &models).await {
+            Ok(()) => break,
             Err(err) => {
-                log::warn!("failed to refresh model list: {err}");
+                log::warn!(
+                    "initial model fetch failed (attempt {}): {err}; retrying in 5s",
+                    attempt
+                );
+                attempt += 1;
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             }
         }
     }
-
-    // Run once immediately so callers have data on startup.
-    refresh_models(&http_client, &models).await;
 
     let models_clone = models.clone();
     let http_client = http_client.clone();
@@ -131,7 +141,7 @@ async fn spawn_model_refresh(
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(10 * 60));
         loop {
             interval.tick().await;
-            refresh_models(&http_client, &models_clone).await;
+            refresh_models(&http_client, &models_clone).await.ok();
         }
     });
 
