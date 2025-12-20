@@ -110,10 +110,10 @@ pub async fn load_conversation(
                 }
                 None => {
                     let r = conn.execute(
-                    "INSERT INTO chats (chat_id, is_authorized, openrouter_api_key, system_prompt) \
-                     VALUES (?1, ?2, ?3, ?4)",
-                    rusqlite::params![chat_id.0, false, "", ""],
-                ).expect("failed to insert chat row");
+                        "INSERT INTO chats (chat_id, is_authorized, openrouter_api_key, system_prompt) \
+                        VALUES (?1, ?2, ?3, ?4)",
+                        rusqlite::params![chat_id.0, false, "", ""],
+                    ).expect("failed to insert chat row");
                     if r != 1 {
                         let error = format!("failed to insert chat row for chat_id {}", chat_id.0);
                         log::error!("{}", error);

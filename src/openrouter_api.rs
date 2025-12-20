@@ -113,16 +113,13 @@ where
 {
     let mut input_items = Vec::new();
 
-    for msg in messages {
-        input_items.push(text_content(
-            msg.role,
-            &msg.text,
-            if msg.role == MessageRole::Assistant {
-                ContentType::Output
-            } else {
-                ContentType::Input
-            },
-        ));
+    for (idx, msg) in messages.into_iter().enumerate() {
+        let content_type = if msg.role == MessageRole::Assistant {
+            ContentType::Output
+        } else {
+            ContentType::Input
+        };
+        input_items.push(message_item(idx, msg.role, &msg.text, content_type));
     }
 
     json!({
@@ -256,13 +253,19 @@ fn model_to_summary(model: ModelRecord) -> ModelSummary {
     }
 }
 
-fn text_content(role: MessageRole, text: &str, content_type: ContentType) -> serde_json::Value {
+fn message_item(
+    idx: usize,
+    role: MessageRole,
+    text: &str,
+    content_type: ContentType,
+) -> serde_json::Value {
     let type_str = match content_type {
         ContentType::Input => "input_text",
         ContentType::Output => "output_text",
     };
 
-    json!({
+    let mut item = json!({
+        "type": "message",
         "role": role.to_string(),
         "content": [
             {
@@ -270,7 +273,14 @@ fn text_content(role: MessageRole, text: &str, content_type: ContentType) -> ser
                 "text": text
             }
         ]
-    })
+    });
+
+    if role == MessageRole::Assistant {
+        item["id"] = json!(format!("local_msg_{idx}"));
+        item["status"] = json!("completed");
+    }
+
+    item
 }
 
 #[cfg(test)]
