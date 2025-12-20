@@ -91,46 +91,42 @@ pub async fn load_conversation(
 
         let conversation = {
             // Fetch exactly one chat row; panic if multiple rows are found.
-            let mut stmt = conn
-                .prepare(
-                    "SELECT is_authorized, openrouter_api_key, system_prompt FROM chats WHERE chat_id = ?1 LIMIT 2",
+            let (is_authorized, openrouter_api_key, system_prompt) = conn
+                .query_row(
+                    "SELECT is_authorized, openrouter_api_key, system_prompt FROM chats WHERE chat_id = ?1",
+                    [chat_id.0],
+                    |row| {
+                        Ok((
+                            row.get::<_, bool>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                        ))
+                    },
                 )
-                .expect("failed to prepare chat lookup statement");
-            let mut rows = stmt.query([chat_id.0]).expect("failed to query chat row");
-
-            let (is_authorized, openrouter_api_key, system_prompt) = match rows
-                .next()
-                .expect("failed to read chat row")
-            {
-                Some(row) => {
-                    let is_authorized: bool = row.get(0).expect("failed to get is_authorized");
-                    let openrouter_api_key: Option<String> =
-                        row.get(1).expect("failed to get openrouter_api_key");
-                    let system_prompt: Option<String> =
-                        row.get(2).expect("failed to get system_prompt");
-                    (is_authorized, openrouter_api_key, system_prompt)
-                }
-                None => {
-                    let r = conn.execute(
-                        "INSERT INTO chats (chat_id, is_authorized, openrouter_api_key, system_prompt) \
-                        VALUES (?1, ?2, ?3, ?4)",
-                        rusqlite::params![
-                            chat_id.0,
-                            false,
-                            Option::<String>::None,
-                            Option::<String>::None
-                        ],
-                    ).expect("failed to insert chat row");
-                    if r != 1 {
-                        fatal_panic(format!(
-                            "failed to insert chat row for chat_id {}",
-                            chat_id.0
-                        ));
+                .or_else(|err| {
+                    if matches!(err, rusqlite::Error::QueryReturnedNoRows) {
+                        let r = conn.execute(
+                            "INSERT INTO chats (chat_id, is_authorized, openrouter_api_key, system_prompt) \
+                            VALUES (?1, ?2, ?3, ?4)",
+                            rusqlite::params![
+                                chat_id.0,
+                                false,
+                                Option::<String>::None,
+                                Option::<String>::None
+                            ],
+                        ).expect("failed to insert chat row");
+                        if r != 1 {
+                            fatal_panic(format!(
+                                "failed to insert chat row for chat_id {}",
+                                chat_id.0
+                            ));
+                        }
+                        Ok((false, None, None))
+                    } else {
+                        Err(err)
                     }
-
-                    (false, None, None)
-                }
-            };
+                })
+                .expect("failed to fetch chat row");
 
             let system_prompt =
                 system_prompt
