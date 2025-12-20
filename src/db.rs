@@ -143,6 +143,8 @@ pub async fn load_conversation(
             let mut stmt =
                 conn.prepare("SELECT role, text FROM history WHERE chat_id = ?1 ORDER BY id DESC")?;
 
+            let mut history: Vec<conversation::Message> = Vec::new();
+
             let rows = stmt
                 .query_map([chat_id.0], |row| {
                     let role: u8 = row.get(0)?;
@@ -151,10 +153,7 @@ pub async fn load_conversation(
 
                     Ok(conversation::Message { role, text })
                 })?
-                .filter_map(|message| message.ok());
-
-            let mut history: Vec<conversation::Message> = Vec::new();
-
+                .filter_map(|row| row.ok());
             for message in rows {
                 history.push(message);
 
