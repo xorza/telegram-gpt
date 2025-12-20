@@ -25,7 +25,7 @@ use teloxide::{
 use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard, RwLock};
 use typing::TypingIndicator;
 
-const DEFAULT_MODEL: &str = "xiaomi/mimo-v2-flash:free";
+const DEFAULT_MODEL: &str = "openai/gpt-5.2";
 const TELEGRAM_MAX_MESSAGE_LENGTH: usize = 4096;
 const STREAM_RESPONSE: bool = false;
 
@@ -85,15 +85,8 @@ async fn init() -> App {
         .await
         .expect("failed to load model");
 
-    let models = match openrouter_api::list_models(&http_client).await {
-        Ok(models) => models,
-        Err(err) => {
-            log::warn!("failed to load model list: {err}");
-            Vec::new()
-        }
-    };
-    let models = Arc::new(RwLock::new(models));
-    spawn_model_refresh(models.clone(), http_client.clone());
+    let models = Arc::new(RwLock::new(Vec::new()));
+    spawn_model_refresh(models.clone(), http_client.as_ref().clone());
 
     let db = Arc::new(Mutex::new(db::init_db()));
 
@@ -125,12 +118,11 @@ async fn init() -> App {
 
 fn spawn_model_refresh(
     models: Arc<RwLock<Vec<openrouter_api::ModelSummary>>>,
-    http_client: Arc<reqwest::Client>,
+    http_client: reqwest::Client,
 ) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(10 * 60));
         loop {
-            interval.tick().await;
             match openrouter_api::list_models(&http_client).await {
                 Ok(latest) => {
                     let mut guard = models.write().await;
@@ -140,6 +132,8 @@ fn spawn_model_refresh(
                     log::warn!("failed to refresh model list: {err}");
                 }
             }
+
+            interval.tick().await;
         }
     });
 }
