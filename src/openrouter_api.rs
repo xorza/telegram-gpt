@@ -21,10 +21,6 @@ pub struct ModelSummary {
     pub context_length: u64,
     /// Provider-advertised maximum completion tokens (if provided by OpenRouter).
     pub max_completion_tokens: u64,
-    /// USD cost per million prompt token.
-    pub prompt_m_token_cost_usd: f64,
-    /// USD cost per million completion/output token.
-    pub completion_m_token_cost_usd: f64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -38,7 +34,6 @@ struct ModelRecord {
     name: String,
     context_length: u64,
     top_provider: TopProvider,
-    pricing: Pricing,
 }
 
 #[derive(Debug, Deserialize)]
@@ -47,12 +42,6 @@ struct TopProvider {
     max_completion_tokens: Option<u64>,
     #[allow(dead_code)]
     is_moderated: bool,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct Pricing {
-    prompt: String,
-    completion: String,
 }
 
 #[derive(Debug)]
@@ -247,15 +236,11 @@ fn extract_output_text(value: &serde_json::Value) -> Response {
 }
 
 fn model_to_summary(model: ModelRecord) -> ModelSummary {
-    let pricing = model.pricing;
-
     ModelSummary {
         id: model.id,
         name: model.name,
         context_length: model.context_length,
         max_completion_tokens: model.top_provider.max_completion_tokens.unwrap_or_default(),
-        prompt_m_token_cost_usd: 1_000_000.0 * pricing.prompt.parse::<f64>().unwrap(),
-        completion_m_token_cost_usd: 1_000_000.0 * pricing.completion.parse::<f64>().unwrap(),
     }
 }
 
@@ -307,10 +292,6 @@ mod tests {
                 "max_completion_tokens": 4096,
                 "is_moderated": true
               },
-              "pricing": {
-                "prompt": "0.00003",
-                "completion": "0.00006"
-              }
             }
           ]
         }"#;
@@ -324,8 +305,6 @@ mod tests {
         assert_eq!(model.name.as_str(), "GPT-4");
         assert_eq!(model.context_length, 8192);
         assert_eq!(model.max_completion_tokens, 4096);
-        assert_eq!(model.prompt_m_token_cost_usd, 1_000_000.0 * 0.00003);
-        assert_eq!(model.completion_m_token_cost_usd, 1_000_000.0 * 0.00006);
     }
 
     // Integration test that calls the live OpenRouter models endpoint.
