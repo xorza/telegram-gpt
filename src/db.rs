@@ -1,4 +1,5 @@
 use crate::conversation::{self, Conversation, Message, MessageRole};
+use crate::openrouter_api;
 use anyhow::Result;
 use rusqlite::{Connection, Error as SqliteError};
 use std::sync::Arc;
@@ -77,7 +78,7 @@ fn set_schema_version(conn: &Connection, version: i32) -> Result<(), SqliteError
 pub async fn load_conversation(
     db: &Arc<Mutex<Connection>>,
     chat_id: ChatId,
-    context_length: u64,
+    token_budget: u64,
 ) -> anyhow::Result<Conversation> {
     let (mut conversation, history) = {
         let conn = db.lock().await;
@@ -155,9 +156,13 @@ pub async fn load_conversation(
             for row in rows {
                 if let Ok(message) = row {
                     // Stop before adding a message that would push us over the budget.
+                    let estimated_tokens =
+                        openrouter_api::estimate_tokens(history.iter().map(|m| m.text.as_str()));
+                    if estimated_tokens > token_budget {
+                        break;
+                    }
 
                     history.push(message);
-                    unimplemented!();
                 }
             }
 

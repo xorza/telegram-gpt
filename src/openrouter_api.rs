@@ -68,7 +68,10 @@ where
 
     let text_tokens = (byte_count + AVG_BYTES_PER_TOKEN - 1) / AVG_BYTES_PER_TOKEN;
 
-    text_tokens + message_count * PER_MESSAGE_OVERHEAD
+    let tokens = text_tokens + message_count * PER_MESSAGE_OVERHEAD;
+
+    // reserve 1/4 of tokens for completion
+    tokens * 5 / 4
 }
 
 pub async fn list_models(http: &Client) -> anyhow::Result<Vec<ModelSummary>> {

@@ -148,11 +148,7 @@ impl App {
             user_message.text.as_str(),
         ]);
 
-        const INPUT_BUDGET_FRACTION_NUM: u64 = 4;
-        const INPUT_BUDGET_FRACTION_DEN: u64 = 5;
-        let budget = (self.model.context_length * INPUT_BUDGET_FRACTION_NUM
-            / INPUT_BUDGET_FRACTION_DEN)
-            .saturating_sub(reserved_tokens);
+        let budget = self.model.context_length.saturating_sub(reserved_tokens);
         conversation.prune_to_token_budget(budget);
 
         let history = std::iter::once(&self.system_prompt0)
