@@ -150,8 +150,8 @@ pub async fn load_history(
 
     let conn = db.lock().await;
 
-    // Fetch latest messages first so we can stop once the token budget is exceeded,
-    // then restore chronological order for conversation reconstruction.
+    // Fetch oldest→newest so we can drop from the front when we exceed the budget
+    // and keep the most recent turns intact.
     let mut stmt = conn
         .prepare("SELECT role, text FROM history WHERE chat_id = ?1 ORDER BY id DESC")
         .expect("failed to prepare history lookup statement");
@@ -166,9 +166,9 @@ pub async fn load_history(
         })
         .expect("failed to query history rows")
         .filter_map(|row| row.ok());
-    for message in rows {
-        conversation.history.push_back(message);
 
+    for message in rows {
+        conversation.history.push_front(message);
         let estimated_tokens =
             openrouter_api::estimate_tokens(conversation.history.iter().map(|m| m.text.as_str()));
         if estimated_tokens > token_budget {
