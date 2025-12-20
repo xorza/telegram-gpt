@@ -60,6 +60,12 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn init() -> App {
+    // Abort the process on any panic, including panics inside spawned Tokio tasks.
+    std::panic::set_hook(Box::new(|info| {
+        log::error!("panic: {info}");
+        std::process::abort();
+    }));
+
     dotenv::dotenv().ok();
 
     // Log to rotating files capped at 10MB each, keeping the 3 newest, while also duplicating info logs to stdout.
