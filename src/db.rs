@@ -7,7 +7,7 @@ use std::sync::Arc;
 use teloxide::types::ChatId;
 use tokio::sync::Mutex;
 
-const SCHEMA_VERSION: i32 = 2;
+const SCHEMA_VERSION: i32 = 1;
 
 pub fn init_db() -> Connection {
     let db_path = std::env::var("SQLITE_PATH").unwrap_or_else(|_| "data/db.sqlite".to_string());
@@ -34,13 +34,13 @@ pub fn init_db() -> Connection {
         init_schema(&conn);
         set_schema_version(&conn, SCHEMA_VERSION);
         log::info!("Initialized database schema version {}", SCHEMA_VERSION);
-    } else if version != SCHEMA_VERSION {
+    } else if version == SCHEMA_VERSION {
+        log::info!("Database schema version {} detected", version);
+    } else {
         fatal_panic(format!(
             "Unsupported database schema version {} (expected {})",
             version, SCHEMA_VERSION
         ));
-    } else {
-        log::info!("Database schema version {} detected", version);
     }
 
     conn
@@ -49,10 +49,10 @@ pub fn init_db() -> Connection {
 fn init_schema(conn: &Connection) {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chat_id INTEGER NOT NULL,
-            role    INTEGER NOT NULL,
-            text    TEXT NOT NULL
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id     INTEGER NOT NULL,
+            role        INTEGER NOT NULL,
+            text        TEXT NOT NULL
         )",
         [],
     )
@@ -60,10 +60,11 @@ fn init_schema(conn: &Connection) {
 
     conn.execute(
         "CREATE TABLE IF NOT EXISTS chats (
-            chat_id INTEGER PRIMARY KEY NOT NULL,
-            is_authorized BOOLEAN NOT NULL,
-            openrouter_api_key  TEXT,
-            system_prompt    TEXT
+            chat_id                 INTEGER PRIMARY KEY NOT NULL,
+            is_authorized           BOOLEAN NOT NULL,
+            openrouter_api_key      TEXT,
+            model_id                TEXT,
+            system_prompt           TEXT
         )",
         [],
     )
@@ -72,7 +73,7 @@ fn init_schema(conn: &Connection) {
 
 fn get_schema_version(conn: &Connection) -> i32 {
     conn.query_row("PRAGMA user_version", [], |row| row.get(0))
-        .expect("failed to get schema version")
+        .unwrap_or_default()
 }
 
 fn set_schema_version(conn: &Connection, version: i32) {
