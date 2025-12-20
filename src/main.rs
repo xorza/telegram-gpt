@@ -32,7 +32,7 @@ const STREAM_RESPONSE: bool = false;
 #[derive(Debug, Clone)]
 struct App {
     bot: Bot,
-    http_client: Arc<reqwest::Client>,
+    http_client: reqwest::Client,
     model: openrouter_api::ModelSummary,
     models: Arc<RwLock<Vec<openrouter_api::ModelSummary>>>,
     conversations: Arc<Mutex<HashMap<ChatId, Conversation>>>,
@@ -79,12 +79,12 @@ async fn init() -> App {
         .expect("failed to start logger");
 
     let bot = Bot::from_env();
-    let http_client = Arc::new(reqwest::Client::new());
+    let http_client = reqwest::Client::new();
     let model_id = std::env::var("OPENROUTER_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
     let model = openrouter_api::model(&http_client, &model_id)
         .await
         .expect("failed to load model");
-    let models = spawn_model_refresh(http_client.as_ref().clone()).await;
+    let models = spawn_model_refresh(http_client.clone()).await;
 
     let db = Arc::new(Mutex::new(db::init_db()));
 
