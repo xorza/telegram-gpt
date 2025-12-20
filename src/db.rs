@@ -12,10 +12,10 @@ pub fn init_db() -> Connection {
     let db_path = std::env::var("SQLITE_PATH").unwrap_or_else(|_| "data/db.sqlite".to_string());
 
     // Ensure parent directory exists
-    if let Some(parent) = std::path::Path::new(&db_path).parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).expect("failed to create parent directory");
-        }
+    if let Some(parent) = std::path::Path::new(&db_path).parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).expect("failed to create parent directory");
     }
 
     let conn = Connection::open(&db_path).expect("failed to open database");
@@ -207,7 +207,7 @@ pub async fn load_conversation(
     conversation
 }
 
-pub async fn add_messages<'a, I>(db: &Arc<Mutex<Connection>>, chat_id: ChatId, messages: I)
+pub async fn add_messages<I>(db: &Arc<Mutex<Connection>>, chat_id: ChatId, messages: I)
 where
     I: IntoIterator<Item = Message>,
 {

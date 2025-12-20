@@ -63,10 +63,10 @@ where
     let (byte_count, message_count) = messages
         .into_iter()
         .fold((0u64, 0u64), |(bytes, msgs), message| {
-            (bytes + message.as_bytes().len() as u64, msgs + 1)
+            (bytes + message.len() as u64, msgs + 1)
         });
 
-    let text_tokens = (byte_count + AVG_BYTES_PER_TOKEN - 1) / AVG_BYTES_PER_TOKEN;
+    let text_tokens = byte_count.div_ceil(AVG_BYTES_PER_TOKEN);
 
     let tokens = text_tokens + message_count * PER_MESSAGE_OVERHEAD;
 
@@ -103,7 +103,7 @@ pub async fn model(http: &Client, model: &str) -> anyhow::Result<ModelSummary> {
         .find(|m| m.id == model)
         .ok_or_else(|| anyhow::anyhow!("model not found"))?;
 
-    return Ok(model);
+    Ok(model)
 }
 
 #[allow(dead_code)]

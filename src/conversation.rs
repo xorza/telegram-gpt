@@ -18,9 +18,10 @@ pub struct Message {
     pub text: String,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
 pub enum MessageRole {
+    #[default]
     System = 0,
     User = 1,
     Assistant = 2,
@@ -76,11 +77,5 @@ impl TryFrom<u8> for MessageRole {
             2 => Ok(MessageRole::Assistant),
             _ => Err(()),
         }
-    }
-}
-
-impl Default for MessageRole {
-    fn default() -> Self {
-        MessageRole::System
     }
 }

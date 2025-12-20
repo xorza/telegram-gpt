@@ -218,9 +218,9 @@ impl App {
     ) -> anyhow::Result<MappedMutexGuard<'_, Conversation>> {
         let mut conv_map = self.conversations.lock().await;
 
-        if !conv_map.contains_key(&chat_id) {
+        if let std::collections::hash_map::Entry::Vacant(entry) = conv_map.entry(chat_id) {
             let conv = db::load_conversation(&self.db, chat_id, self.model.context_length).await;
-            conv_map.insert(chat_id, conv);
+            entry.insert(conv);
         }
 
         Ok(MutexGuard::map(conv_map, |map| {
@@ -244,9 +244,7 @@ async fn handle_stream_delta(
     fn take_prefix(buf: &mut String, max_chars: usize) -> String {
         let mut last_whitespace = None;
         let mut byte_split = buf.len();
-        let mut char_idx = 0usize;
-
-        for (i, ch) in buf.char_indices() {
+        for (char_idx, (i, ch)) in buf.char_indices().enumerate() {
             if char_idx == max_chars {
                 byte_split = i;
                 break;
@@ -254,7 +252,6 @@ async fn handle_stream_delta(
             if ch.is_whitespace() {
                 last_whitespace = Some(i);
             }
-            char_idx += 1;
         }
 
         // Buffer shorter than max_chars — take it all.
