@@ -53,8 +53,24 @@ pub struct Response {
     pub completion_text: String,
 }
 
-/// Fetch available OpenRouter models, returning their ids, context limits, and token prices.
-#[allow(dead_code)]
+pub fn estimate_tokens<'a, I>(messages: I) -> u64
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    const AVG_BYTES_PER_TOKEN: u64 = 4;
+    const PER_MESSAGE_OVERHEAD: u64 = 10;
+
+    let (byte_count, message_count) = messages
+        .into_iter()
+        .fold((0u64, 0u64), |(bytes, msgs), message| {
+            (bytes + message.as_bytes().len() as u64, msgs + 1)
+        });
+
+    let text_tokens = (byte_count + AVG_BYTES_PER_TOKEN - 1) / AVG_BYTES_PER_TOKEN;
+
+    text_tokens + message_count * PER_MESSAGE_OVERHEAD
+}
+
 pub async fn list_models(http: &Client) -> anyhow::Result<Vec<ModelSummary>> {
     let request = http.get(MODELS_ENDPOINT);
 
