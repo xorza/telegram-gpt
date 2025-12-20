@@ -40,7 +40,7 @@ struct App {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let app = init().await?;
+    let app = init().await;
 
     teloxide::repl(app.bot.clone(), move |_bot: Bot, msg: Message| {
         let app = app.clone();
@@ -59,11 +59,12 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn init() -> anyhow::Result<App, anyhow::Error> {
+async fn init() -> App {
     dotenv::dotenv().ok();
 
     // Log to rotating files capped at 10MB each, keeping the 3 newest, while also duplicating info logs to stdout.
-    Logger::try_with_env_or_str("info")?
+    Logger::try_with_env_or_str("info")
+        .expect("failed to initialize logger")
         .log_to_file(FileSpec::default().directory("logs"))
         .rotate(
             Criterion::Size(10 * 1024 * 1024),
@@ -71,14 +72,17 @@ async fn init() -> anyhow::Result<App, anyhow::Error> {
             Cleanup::KeepLogFiles(3),
         )
         .duplicate_to_stdout(Duplicate::All)
-        .start()?;
+        .start()
+        .expect("failed to start logger");
 
     let bot = Bot::from_env();
     let http_client = Arc::new(reqwest::Client::new());
     let model_id = std::env::var("OPENROUTER_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
-    let model = openrouter_api::model(&http_client, &model_id).await?;
+    let model = openrouter_api::model(&http_client, &model_id)
+        .await
+        .expect("failed to load model");
 
-    let db = Arc::new(Mutex::new(db::init_db()?));
+    let db = Arc::new(Mutex::new(db::init_db()));
 
     let conversations: Arc<Mutex<HashMap<ChatId, Conversation>>> =
         Arc::new(Mutex::new(HashMap::new()));
@@ -95,14 +99,14 @@ async fn init() -> anyhow::Result<App, anyhow::Error> {
         model.context_length
     );
 
-    Ok(App {
+    App {
         bot,
         http_client,
         model,
         conversations,
         db,
         system_prompt0,
-    })
+    }
 }
 
 impl App {
@@ -191,7 +195,7 @@ impl App {
                 self.get_conversation(chat_id)
                     .await?
                     .add_messages(messages.iter().cloned());
-                db::add_messages(&self.db, chat_id, messages.into_iter()).await?;
+                db::add_messages(&self.db, chat_id, messages.into_iter()).await;
             }
             Err(err) => {
                 log::error!("failed to get llm response: {err}");
@@ -215,7 +219,7 @@ impl App {
         let mut conv_map = self.conversations.lock().await;
 
         if !conv_map.contains_key(&chat_id) {
-            let conv = db::load_conversation(&self.db, chat_id, self.model.context_length).await?;
+            let conv = db::load_conversation(&self.db, chat_id, self.model.context_length).await;
             conv_map.insert(chat_id, conv);
         }
 

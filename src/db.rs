@@ -21,7 +21,9 @@ pub fn init_db() -> Connection {
     let conn = Connection::open(&db_path).expect("failed to open database");
 
     match std::env::var("DB_ENCRYPTION_KEY") {
-        Ok(key) if !key.is_empty() => conn.pragma_update(None, "key", &key).expect(""),
+        Ok(key) if !key.is_empty() => conn
+            .pragma_update(None, "key", &key)
+            .expect("failed to set database encryption key pragma"),
         _ => log::warn!("DB_ENCRYPTION_KEY not set; database will be unencrypted"),
     }
 
@@ -92,10 +94,13 @@ pub async fn load_conversation(
                     "SELECT is_authorized, openrouter_api_key, system_prompt \
             FROM chats WHERE chat_id = ?1 LIMIT 2",
                 )
-                .expect("");
-            let mut rows = stmt.query([chat_id.0]).expect("");
+                .expect("failed to prepare chat lookup statement");
+            let mut rows = stmt.query([chat_id.0]).expect("failed to query chat row");
 
-            let (is_authorized, openrouter_api_key, system_prompt) = match rows.next().expect("") {
+            let (is_authorized, openrouter_api_key, system_prompt) = match rows
+                .next()
+                .expect("failed to read chat row")
+            {
                 Some(row) => {
                     let is_authorized: bool = row.get(0).expect("failed to get is_authorized");
                     let openrouter_api_key: String =
@@ -147,7 +152,7 @@ pub async fn load_conversation(
             // then restore chronological order for conversation reconstruction.
             let mut stmt = conn
                 .prepare("SELECT role, text FROM history WHERE chat_id = ?1 ORDER BY id DESC")
-                .expect("");
+                .expect("failed to prepare history lookup statement");
 
             let mut history: Vec<conversation::Message> = Vec::new();
 
@@ -159,7 +164,7 @@ pub async fn load_conversation(
 
                     Ok(conversation::Message { role, text })
                 })
-                .expect("")
+                .expect("failed to query history rows")
                 .filter_map(|row| row.ok());
             for message in rows {
                 history.push(message);
@@ -214,7 +219,8 @@ where
         tx.execute(
             "INSERT INTO history (chat_id, role, text) VALUES (?1, ?2, ?3)",
             rusqlite::params![chat_id.0, msg.role as u8, msg.text],
-        )?;
+        )
+        .expect("failed to insert message");
     }
 
     tx.commit().expect("failed to commit transaction");
