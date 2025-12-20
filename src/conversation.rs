@@ -1,6 +1,8 @@
 use log::warn;
 use std::{collections::VecDeque, fmt::Display, sync::Arc};
 
+use crate::openrouter_api;
+
 #[derive(Debug)]
 pub struct Conversation {
     pub chat_id: u64,
@@ -38,8 +40,19 @@ impl Conversation {
         }
     }
 
-    pub fn prune_to_token_budget(&mut self, token_budet: u64) {
-        
+    pub fn prune_to_token_budget(&mut self, token_budget: u64) {
+        assert!(token_budget > 0, "Token budget must be greater than zero");
+
+        let mut estimated_tokens =
+            openrouter_api::estimate_tokens(self.history.iter().map(|m| m.text.as_str()));
+
+        while estimated_tokens > token_budget {
+            if self.history.pop_front().is_none() {
+                break;
+            }
+            estimated_tokens =
+                openrouter_api::estimate_tokens(self.history.iter().map(|m| m.text.as_str()));
+        }
     }
 }
 
