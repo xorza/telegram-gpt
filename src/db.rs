@@ -189,7 +189,7 @@ pub async fn load_conversation(
     log::info!(
         "Loaded conversation {} with {} messages",
         conversation.chat_id,
-        conversation.history.len() * 2,
+        conversation.history.len(),
     );
 
     Ok(conversation)
@@ -209,7 +209,7 @@ where
 
     for msg in messages {
         tx.execute(
-            "INSERT INTO history (chat_id, role, text) VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO history (chat_id, role, text) VALUES (?1, ?2, ?3)",
             rusqlite::params![chat_id.0, msg.role as u8, msg.text],
         )?;
     }
