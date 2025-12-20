@@ -25,7 +25,7 @@ use teloxide::{
 use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard, RwLock};
 use typing::TypingIndicator;
 
-const DEFAULT_MODEL: &str = "openai/gpt-5.2";
+const DEFAULT_MODEL: &str = "xiaomi/mimo-v2-flash:free";
 const TELEGRAM_MAX_MESSAGE_LENGTH: usize = 4096;
 const STREAM_RESPONSE: bool = false;
 
