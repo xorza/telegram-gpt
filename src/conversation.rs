@@ -38,8 +38,8 @@ impl Conversation {
         }
     }
 
-    pub fn prune_to_token_budget(&mut self, context_length: u64) {
-        unimplemented!()
+    pub fn prune_to_token_budget(&mut self, token_budet: u64) {
+        
     }
 }
 
