@@ -1,23 +1,23 @@
 # tggpt
 
-Telegram bot that relays user messages to the OpenAI Responses API, keeps a rolling chat history per chat in SQLite, and streams a typing indicator while the model works.
+Telegram bot that relays user messages to the OpenRouter Responses API, keeps a rolling chat history per chat in SQLite, and streams a typing indicator while the model works.
 
 ## Features
 - Telegram transport via `teloxide`, responding only to text messages.
-- Per-chat OpenAI API key, optional system prompt, and on-disk history so context survives restarts.
-- Token counting with `tiktoken-rs`; oldest turns are pruned to stay within the model context window.
+- Per-chat OpenRouter API key, optional system prompt, and on-disk history so context survives restarts.
+- Token counting with a simple estimator; oldest turns are pruned to stay within the model context window.
 - Rotating file logs in `logs/` (10 MB, keep 3) plus stdout duplication.
 
 ## Prerequisites
 - Rust 1.82+ (edition 2024).
 - SQLite; `SQLITE_PATH` defaults to `data/db.sqlite` and the directory is created automatically.
-- OpenAI API access for each authorized chat.
+- OpenRouter API access for each authorized chat.
 
 ## Configuration
 Set environment variables (e.g., in a `.env` file):
 
 - `TELOXIDE_TOKEN` – Telegram bot token (required).
-- `OPEN_AI_MODEL` – OpenAI model name (default: `gpt-4.1`).
+- `OPENROUTER_MODEL` – OpenRouter model ID (default: `xiaomi/mimo-v2-flash:free`).
 - `SQLITE_PATH` – Path to the SQLite database (default: `data/db.sqlite`).
 - `DB_ENCRYPTION_KEY` – Optional SQLCipher key if your SQLite build supports it.
 - `RUST_LOG` – Optional log level filter (e.g., `info`, `debug`).
@@ -36,10 +36,10 @@ New chats are inserted into `chats` with `is_authorized = 0` and no API key. The
 3. Update the database (replace placeholders):
 ```sh
 sqlite3 data/db.sqlite \
-  "UPDATE chats SET is_authorized=1, open_ai_api_key='sk-...', system_prompt='You are a helpful assistant.' WHERE chat_id=<chat_id>;"
+  "UPDATE chats SET is_authorized=1, openrouter_api_key='sk-...', system_prompt='You are a helpful assistant.' WHERE chat_id=<chat_id>;"
 ```
 
-Each chat uses its own OpenAI API key; you can store different keys or prompts per chat.
+Each chat uses its own OpenRouter API key; you can store different keys or prompts per chat.
 
 ## Persistence model
 - `history` table stores alternating user/assistant messages with token counts.
@@ -48,5 +48,5 @@ Each chat uses its own OpenAI API key; you can store different keys or prompts p
 
 ## Operational notes
 - Only text messages are handled; non-text inputs receive a friendly prompt to send text.
-- The typing indicator runs while awaiting the OpenAI response and stops once a reply is sent or an error occurs.
+- The typing indicator runs while awaiting the OpenRouter response and stops once a reply is sent or an error occurs.
 - Log rotation may leave up to three compressed history files under `logs/`.
