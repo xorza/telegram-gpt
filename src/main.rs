@@ -9,7 +9,11 @@ mod typing;
 
 use conversation::{Conversation, MessageRole};
 use flexi_logger::{Cleanup, Criterion, Duplicate, FileSpec, Logger, Naming};
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use telegram::{bot_split_send_formatted, escape_markdown_v2};
 use teloxide::{
     prelude::*,
@@ -27,6 +31,7 @@ struct App {
     http_client: reqwest::Client,
     models: Arc<RwLock<Vec<openrouter_api::ModelSummary>>>,
     conversations: Arc<Mutex<HashMap<ChatId, Conversation>>>,
+    group_llm_rate_limits: Arc<Mutex<HashMap<ChatId, VecDeque<Instant>>>>,
     db: tokio_rusqlite::Connection,
     system_prompt0: conversation::Message,
     default_model: String,
@@ -83,6 +88,8 @@ async fn init() -> App {
     let db = db::init_db().await;
     let conversations: Arc<Mutex<HashMap<ChatId, Conversation>>> =
         Arc::new(Mutex::new(HashMap::new()));
+    let group_llm_rate_limits: Arc<Mutex<HashMap<ChatId, VecDeque<Instant>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
     let system_prompt0 = conversation::Message {
         role: conversation::MessageRole::System,
         text: "You are a Telegram bot. In group chats you may see many messages, but only treat the latest message that explicitly mentions @<bot_name> (or replies to you) as the user's prompt; ignore the rest. Respond in plain text only (no Markdown).".to_string(),
@@ -102,6 +109,7 @@ async fn init() -> App {
         http_client,
         models,
         conversations,
+        group_llm_rate_limits,
         db,
         system_prompt0,
         default_model,
@@ -145,6 +153,20 @@ impl App {
             return Ok(());
         }
 
+        if is_public && let Err(wait_time) = self.check_group_llm_rate_limit(chat_id).await {
+            let wait_minutes = wait_time.as_secs().div_ceil(60);
+            let message = format!(
+                "Rate limit reached: max 10 LLM requests per hour for group chats. Try again in about {wait_minutes} minute(s)."
+            );
+            self.bot.send_message(chat_id, message).await?;
+            log::info!(
+                "rate limit hit for group chat {} (wait ~{} mins)",
+                chat_id,
+                wait_minutes
+            );
+            return Ok(());
+        }
+
         let user_message = self.extract_user_message(&msg).await?;
         let (payload, openai_api_key) = match self.prepare_llm_request(chat_id, &user_message).await
         {
@@ -163,6 +185,37 @@ impl App {
 
         self.handle_llm_response(chat_id, msg.id, is_public, user_message, llm_response)
             .await
+    }
+
+    async fn check_group_llm_rate_limit(&self, chat_id: ChatId) -> Result<(), Duration> {
+        const GROUP_LLM_LIMIT: usize = 10;
+        const GROUP_LLM_WINDOW: Duration = Duration::from_secs(60 * 60);
+
+        let mut rate_limits = self.group_llm_rate_limits.lock().await;
+        let timestamps = rate_limits.entry(chat_id).or_default();
+        let now = Instant::now();
+
+        while let Some(&oldest) = timestamps.front() {
+            if now.duration_since(oldest) >= GROUP_LLM_WINDOW {
+                timestamps.pop_front();
+            } else {
+                break;
+            }
+        }
+
+        if timestamps.len() >= GROUP_LLM_LIMIT {
+            let oldest = *timestamps
+                .front()
+                .expect("timestamps should be non-empty when over limit");
+            let elapsed = now.duration_since(oldest);
+            let wait_time = GROUP_LLM_WINDOW
+                .checked_sub(elapsed)
+                .unwrap_or_else(|| Duration::from_secs(0));
+            return Err(wait_time);
+        }
+
+        timestamps.push_back(now);
+        Ok(())
     }
 
     async fn ensure_authorized(&self, chat_id: ChatId) -> anyhow::Result<()> {
