@@ -64,7 +64,8 @@ fn init_schema(conn: &Connection) {
             is_authorized           BOOLEAN NOT NULL,
             openrouter_api_key      TEXT,
             model_id                TEXT,
-            system_prompt           TEXT
+            system_prompt           TEXT,
+            user_name               TEXT
         )",
         [],
     )
@@ -85,9 +86,9 @@ pub async fn load_conversation(db: &Arc<Mutex<Connection>>, chat_id: ChatId) -> 
     let conn = db.lock().await;
 
     // Fetch exactly one chat row; panic if multiple rows are found.
-    let (is_authorized, openrouter_api_key, model_id, system_prompt) = conn
+    let (is_authorized, openrouter_api_key, model_id, system_prompt, user_name) = conn
                 .query_row(
-                    "SELECT is_authorized, openrouter_api_key, model_id, system_prompt FROM chats WHERE chat_id = ?1",
+                    "SELECT is_authorized, openrouter_api_key, model_id, system_prompt, user_name FROM chats WHERE chat_id = ?1",
                     [chat_id.0],
                     |row| {
                         Ok((
@@ -95,17 +96,19 @@ pub async fn load_conversation(db: &Arc<Mutex<Connection>>, chat_id: ChatId) -> 
                             row.get::<_, Option<String>>(1)?,
                             row.get::<_, Option<String>>(2)?,
                             row.get::<_, Option<String>>(3)?,
+                            row.get::<_, Option<String>>(4)?,
                         ))
                     },
                 )
                 .or_else(|err| {
                     if matches!(err, rusqlite::Error::QueryReturnedNoRows) {
                         let r = conn.execute(
-                            "INSERT INTO chats (chat_id, is_authorized, openrouter_api_key, model_id, system_prompt) \
-                            VALUES (?1, ?2, ?3, ?4, ?5)",
+                            "INSERT INTO chats (chat_id, is_authorized, openrouter_api_key, model_id, system_prompt, user_name) \
+                            VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                             rusqlite::params![
                                 chat_id.0,
                                 false,
+                                Option::<String>::None,
                                 Option::<String>::None,
                                 Option::<String>::None,
                                 Option::<String>::None
@@ -117,7 +120,7 @@ pub async fn load_conversation(db: &Arc<Mutex<Connection>>, chat_id: ChatId) -> 
                                 chat_id.0
                             ));
                         }
-                        Ok((false, None, None, None))
+                        Ok((false, None, None, None, None))
                     } else {
                         Err(err)
                     }
@@ -138,6 +141,7 @@ pub async fn load_conversation(db: &Arc<Mutex<Connection>>, chat_id: ChatId) -> 
         openrouter_api_key,
         model_id,
         system_prompt,
+        user_name,
     }
 }
 
@@ -252,6 +256,23 @@ pub async fn set_system_prompt(
     if updated != 1 {
         fatal_panic(format!(
             "failed to update system prompt for chat_id {} (updated {})",
+            chat_id.0, updated
+        ));
+    }
+}
+
+pub async fn set_user_name(db: &Arc<Mutex<Connection>>, chat_id: ChatId, user_name: Option<&str>) {
+    let conn = db.lock().await;
+    let updated = conn
+        .execute(
+            "UPDATE chats SET user_name = ?2 WHERE chat_id = ?1",
+            rusqlite::params![chat_id.0, user_name],
+        )
+        .expect("failed to update user name");
+
+    if updated != 1 {
+        fatal_panic(format!(
+            "failed to update user name for chat_id {} (updated {})",
             chat_id.0, updated
         ));
     }

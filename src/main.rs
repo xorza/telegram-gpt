@@ -157,6 +157,8 @@ impl App {
         let chat_id = msg.chat.id;
         log::info!("received message from chat {}", chat_id);
 
+        self.maybe_update_user_name(&msg).await;
+
         if !self.get_conversation(chat_id).await.is_authorized {
             let message = format!(
                 "You are not authorized to use this bot. Chat id {}",
@@ -239,6 +241,44 @@ impl App {
         }
 
         Ok(())
+    }
+
+    async fn maybe_update_user_name(&self, msg: &Message) {
+        let Some(user) = msg.from() else {
+            return;
+        };
+
+        let user_name = user.username.clone().or_else(|| {
+            let mut name = user.first_name.clone();
+            if let Some(last) = user.last_name.as_ref() {
+                if !last.is_empty() {
+                    if !name.is_empty() {
+                        name.push(' ');
+                    }
+                    name.push_str(last);
+                }
+            }
+            if name.is_empty() { None } else { Some(name) }
+        });
+
+        let Some(user_name) = user_name else {
+            return;
+        };
+
+        let chat_id = msg.chat.id;
+        let should_update = {
+            let mut conv = self.get_conversation(chat_id).await;
+            if conv.user_name.as_deref() != Some(user_name.as_str()) {
+                conv.user_name = Some(user_name.clone());
+                true
+            } else {
+                false
+            }
+        };
+
+        if should_update {
+            db::set_user_name(&self.db, chat_id, Some(&user_name)).await;
+        }
     }
 
     async fn process_command(

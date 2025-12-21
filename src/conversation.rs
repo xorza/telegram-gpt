@@ -11,6 +11,7 @@ pub struct Conversation {
     pub openrouter_api_key: Option<String>,
     pub model_id: Option<String>,
     pub system_prompt: Option<Message>,
+    pub user_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
