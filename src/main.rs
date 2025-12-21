@@ -293,7 +293,14 @@ impl App {
         chat_id: ChatId,
         user_message: &conversation::Message,
     ) -> anyhow::Result<()> {
-        let command = user_message.text.split_whitespace().next().unwrap();
+        let text = user_message.text.trim();
+        let mut parts = text.splitn(2, char::is_whitespace);
+        let command = parts.next().unwrap_or("");
+        let arg_text = match parts.next().map(str::trim) {
+            None | Some("") => CommandArg::Empty,
+            Some(arg) if arg.to_lowercase() == "none" => CommandArg::None,
+            Some(arg) => CommandArg::Text(arg.to_string()),
+        };
         log::info!("Received command: {}", command);
         match command {
             "/models" => {
@@ -318,9 +325,8 @@ impl App {
                 let message = format!("Available models:\n{}", models);
                 self.bot_split_send(chat_id, &message).await?;
             }
-            "/model" => {
-                let model_id = user_message.text.trim_start_matches("/model").trim();
-                if model_id.is_empty() {
+            "/model" => match arg_text {
+                CommandArg::Empty => {
                     let current_model_id = {
                         let conv = self.get_conversation(chat_id).await;
                         conv.model_id.clone()
@@ -329,7 +335,8 @@ impl App {
                     self.bot
                         .send_message(chat_id, format!("Current model: `{}`", model.id))
                         .await?;
-                } else if model_id.to_lowercase() == "none" {
+                }
+                CommandArg::None => {
                     {
                         let mut conv = self.get_conversation(chat_id).await;
                         conv.model_id = None;
@@ -338,7 +345,8 @@ impl App {
                     self.bot
                         .send_message(chat_id, "Model cleared; using default.")
                         .await?;
-                } else {
+                }
+                CommandArg::Text(model_id) => {
                     let available_models = self.models.read().await;
                     let selected_model = available_models.iter().find(|m| m.id == model_id);
 
@@ -363,10 +371,9 @@ impl App {
                             .await?;
                     }
                 }
-            }
-            "/key" => {
-                let key = user_message.text.trim_start_matches("/key").trim();
-                if key.is_empty() {
+            },
+            "/key" => match arg_text {
+                CommandArg::Empty => {
                     let current_key = {
                         let conv = self.get_conversation(chat_id).await;
                         conv.openrouter_api_key.clone()
@@ -381,28 +388,26 @@ impl App {
                             self.bot.send_message(chat_id, "No API key set.").await?;
                         }
                     }
-                } else if key.to_lowercase() == "none" {
+                }
+                CommandArg::None => {
                     {
                         let mut conv = self.get_conversation(chat_id).await;
                         conv.openrouter_api_key = None;
                     }
                     db::set_openrouter_api_key(&self.db, chat_id, None).await;
                     self.bot.send_message(chat_id, "API key cleared.").await?;
-                } else {
+                }
+                CommandArg::Text(key) => {
                     {
                         let mut conv = self.get_conversation(chat_id).await;
-                        conv.openrouter_api_key = Some(key.to_string());
+                        conv.openrouter_api_key = Some(key.clone());
                     }
-                    db::set_openrouter_api_key(&self.db, chat_id, Some(key)).await;
+                    db::set_openrouter_api_key(&self.db, chat_id, Some(&key)).await;
                     self.bot.send_message(chat_id, "API key updated.").await?;
                 }
-            }
-            "/system_prompt" => {
-                let prompt = user_message
-                    .text
-                    .trim_start_matches("/system_prompt")
-                    .trim();
-                if prompt.is_empty() {
+            },
+            "/system_prompt" => match arg_text {
+                CommandArg::Empty => {
                     let current_prompt = {
                         let conv = self.get_conversation(chat_id).await;
                         conv.system_prompt.as_ref().map(|p| p.text.clone())
@@ -422,7 +427,8 @@ impl App {
                                 .await?;
                         }
                     }
-                } else if prompt.to_lowercase() == "none" {
+                }
+                CommandArg::None => {
                     {
                         let mut conv = self.get_conversation(chat_id).await;
                         conv.system_prompt = None;
@@ -431,20 +437,21 @@ impl App {
                     self.bot
                         .send_message(chat_id, "System prompt cleared.")
                         .await?;
-                } else {
+                }
+                CommandArg::Text(prompt) => {
                     {
                         let mut conv = self.get_conversation(chat_id).await;
                         conv.system_prompt = Some(conversation::Message {
                             role: MessageRole::System,
-                            text: prompt.to_string(),
+                            text: prompt.clone(),
                         });
                     }
-                    db::set_system_prompt(&self.db, chat_id, Some(prompt)).await;
+                    db::set_system_prompt(&self.db, chat_id, Some(&prompt)).await;
                     self.bot
                         .send_message(chat_id, "System prompt updated.")
                         .await?;
                 }
-            }
+            },
             _ => {
                 self.bot.send_message(chat_id, "Unknown command").await?;
             }
@@ -564,6 +571,12 @@ impl App {
                 .expect("conversation entry just inserted or already existed")
         })
     }
+}
+
+enum CommandArg {
+    Empty,
+    None,
+    Text(String),
 }
 
 #[derive(Debug)]
