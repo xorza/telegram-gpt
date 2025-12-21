@@ -18,7 +18,7 @@ use std::{collections::HashMap, sync::Arc};
 use telegram::{bot_split_send_formatted, escape_markdown_v2};
 use teloxide::{
     prelude::*,
-    types::{ChatId, MessageId, ParseMode, ReactionType},
+    types::{ChatId, MessageId, MessageKind, ParseMode, ReactionType},
 };
 use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard, RwLock};
 use typing::TypingIndicator;
@@ -88,7 +88,7 @@ async fn init() -> App {
     let db = Arc::new(Mutex::new(db::init_db()));
     let conversations: Arc<Mutex<HashMap<ChatId, Conversation>>> =
         Arc::new(Mutex::new(HashMap::new()));
-    let system_text0 = "Do not output markdown, use plain text.".to_string();
+    let system_text0 = "You are a Telegram bot. In group chats you may see many messages, but only treat the latest message that explicitly mentions @<bot_name> (or replies to you) as the user's prompt; ignore the rest. Respond in plain text only (no Markdown).".to_string();
     let system_prompt0 = conversation::Message {
         role: conversation::MessageRole::System,
         text: system_text0,
@@ -112,6 +112,10 @@ async fn init() -> App {
 
 impl App {
     async fn process_message(&self, msg: Message) -> anyhow::Result<()> {
+        if !matches!(msg.kind, MessageKind::Common(..)) {
+            return Ok(());
+        }
+
         let chat_id = msg.chat.id;
         log::info!("received message from chat {}", chat_id);
 
