@@ -122,17 +122,21 @@ impl App {
 
         let user_message = self.extract_user_message(chat_id, &msg).await?;
 
-        let is_authorized = self.get_conversation(chat_id).await.is_authorized;
         let is_group = msg.chat.is_group() || msg.chat.is_supergroup();
-        if is_group
-            && !self
-                .should_process_group_message(chat_id, &msg, &user_message)
-                .await
-        {
+        if is_group && !self.should_process_group_message(&msg).await {
+            self.persist_messages(chat_id, std::slice::from_ref(&user_message))
+                .await;
+            log::info!("ignored group message without mention for chat {}", chat_id);
             return Ok(());
         }
 
-        if !is_authorized {
+        // Never respond to other bots to avoid bot-bot loops.
+        if msg.from.as_ref().map(|u| u.is_bot).unwrap_or(false) {
+            log::info!("ignoring message from bot account in chat {}", msg.chat.id);
+            return Ok(());
+        }
+
+        if !self.get_conversation(chat_id).await.is_authorized {
             let message = format!(
                 "You are not authorized to use this bot. Chat id {}",
                 chat_id
@@ -201,12 +205,7 @@ impl App {
     }
 
     /// In group chats, only process messages that mention or reply to the bot; otherwise, just record them.
-    async fn should_process_group_message(
-        &self,
-        chat_id: ChatId,
-        msg: &Message,
-        user_message: &conversation::Message,
-    ) -> bool {
+    async fn should_process_group_message(&self, msg: &Message) -> bool {
         let bot_username = self.bot_username.to_ascii_lowercase();
         let mentions_bot = msg
             .text()
@@ -232,10 +231,6 @@ impl App {
         if mentions_bot || is_reply_to_bot {
             return true;
         }
-
-        self.persist_messages(chat_id, std::slice::from_ref(user_message))
-            .await;
-        log::info!("ignored group message without mention for chat {}", chat_id);
 
         false
     }
