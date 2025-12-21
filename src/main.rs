@@ -302,9 +302,10 @@ impl App {
         chat_id: ChatId,
         user_message: &conversation::Message,
     ) -> anyhow::Result<()> {
-        let command = match parse_command(user_message.text.as_str(), &self.bot_username) {
+        let command = match parse_command(user_message.text.as_str()) {
             Ok(command) => command,
             Err(message) => {
+                log::warn!("Failed to parse command: {}", message);
                 self.bot.send_message(chat_id, message).await?;
                 return Ok(());
             }
@@ -641,14 +642,19 @@ enum CommandArg {
 }
 
 impl CommandArg {
-    fn from_text(text: &str) -> Self {
-        let trimmed = text.trim();
-        if trimmed.is_empty() {
-            CommandArg::Empty
-        } else if trimmed.eq_ignore_ascii_case("none") {
-            CommandArg::None
-        } else {
-            CommandArg::Text(trimmed.to_string())
+    fn from_text(text: Option<&str>) -> Self {
+        match text {
+            Some(text) => {
+                let trimmed = text.trim();
+                if trimmed.is_empty() {
+                    CommandArg::Empty
+                } else if trimmed.eq_ignore_ascii_case("none") {
+                    CommandArg::None
+                } else {
+                    CommandArg::Text(trimmed.to_string())
+                }
+            }
+            None => CommandArg::None,
         }
     }
 }
@@ -678,52 +684,47 @@ enum ApproveArg {
     ApproveChat { chat_id: u64, is_authorized: bool },
 }
 
-fn parse_command(text: &str, bot_username: &str) -> Result<Command, String> {
+fn parse_command(text: &str) -> Result<Command, String> {
     let trimmed = text.trim();
     if !trimmed.starts_with('/') {
         return Err("Unknown command".to_string());
     }
 
-    let mut parts = trimmed.split_whitespace();
-    let raw_cmd = parts.next().unwrap_or_default();
-    let mut cmd = raw_cmd.trim_start_matches('/');
-    let mut targeted = None;
-    if let Some((name, user)) = cmd.split_once('@') {
-        cmd = name;
-        targeted = Some(user);
+    let parts = trimmed
+        .trim_start_matches('/')
+        .splitn(2, ' ')
+        .collect::<Vec<&str>>();
+    let cmd = parts.first();
+    if cmd.is_none() {
+        return Err("Unknown command".to_string());
     }
 
-    if let Some(user) = targeted {
-        if !user.eq_ignore_ascii_case(bot_username) {
-            return Err("Unknown command".to_string());
-        }
-    }
-
-    let args: Vec<&str> = parts.collect();
-    let arg_text = args.join(" ");
+    let cmd = cmd.unwrap();
+    let args = parts.get(1).copied();
 
     match cmd.to_ascii_lowercase().as_str() {
         "help" => {
-            if args.is_empty() {
+            if args.is_none() {
                 Ok(Command::Help)
             } else {
                 Err("Unknown command".to_string())
             }
         }
         "models" => {
-            if args.is_empty() {
+            if args.is_none() {
                 Ok(Command::Models)
             } else {
                 Err("Unknown command".to_string())
             }
         }
-        "model" => Ok(Command::Model(CommandArg::from_text(&arg_text))),
-        "key" => Ok(Command::Key(CommandArg::from_text(&arg_text))),
-        "systemprompt" => Ok(Command::SystemPrompt(CommandArg::from_text(&arg_text))),
+        "model" => Ok(Command::Model(CommandArg::from_text(args))),
+        "key" => Ok(Command::Key(CommandArg::from_text(args))),
+        "systemprompt" => Ok(Command::SystemPrompt(CommandArg::from_text(args))),
         "approve" => {
-            if args.is_empty() {
+            if args.is_none() {
                 return Ok(Command::Approve(ApproveArg::Empty));
             }
+            let args = args.unwrap().split_whitespace().collect::<Vec<&str>>();
             if args.len() != 2 {
                 return Ok(Command::Approve(ApproveArg::Invalid));
             }
