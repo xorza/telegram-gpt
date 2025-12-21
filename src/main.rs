@@ -143,12 +143,12 @@ impl App {
 
         if user_message.text.starts_with("/") {
             if is_group {
-                self.process_command(chat_id, &user_message).await?;
+                self.bot
+                    .send_message(chat_id, "Commands not allowed in chats")
+                    .await?;
                 return Ok(());
             } else {
-                self.bot
-                    .send_message(chat_id, "Commands not allowed in private chats")
-                    .await?;
+                self.process_command(chat_id, &user_message).await?;
                 return Ok(());
             }
         }
