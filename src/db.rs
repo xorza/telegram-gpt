@@ -2,7 +2,6 @@ use crate::conversation::{self, Conversation, Message, MessageRole};
 use crate::openrouter_api;
 use crate::panic_handler::fatal_panic;
 use anyhow::Result;
-use std::sync::Arc;
 use teloxide::types::ChatId;
 use tokio_rusqlite::Connection;
 use tokio_rusqlite::rusqlite::{Connection as SyncConnection, Error as SqliteError, params};
@@ -91,7 +90,7 @@ fn set_schema_version(conn: &SyncConnection, version: i32) {
         .expect("failed to set schema version");
 }
 
-pub async fn load_conversation(db: &Arc<Connection>, chat_id: ChatId) -> Conversation {
+pub async fn load_conversation(db: &Connection, chat_id: ChatId) -> Conversation {
     let chat_id_val = chat_id.0;
 
     db.call(move |conn| {
@@ -162,11 +161,7 @@ pub async fn load_conversation(db: &Arc<Connection>, chat_id: ChatId) -> Convers
         .expect("failed to load conversation")
 }
 
-pub async fn load_history(
-    db: &Arc<Connection>,
-    conversation: &mut Conversation,
-    token_budget: u64,
-) {
+pub async fn load_history(db: &Connection, conversation: &mut Conversation, token_budget: u64) {
     conversation.history.clear();
 
     let chat_id = conversation.chat_id;
@@ -207,7 +202,7 @@ pub async fn load_history(
     }
 }
 
-pub async fn add_messages<I>(db: &Arc<Connection>, chat_id: ChatId, messages: I)
+pub async fn add_messages<I>(db: &Connection, chat_id: ChatId, messages: I)
 where
     I: IntoIterator<Item = Message>,
 {
@@ -234,7 +229,7 @@ where
 }
 
 pub async fn set_openrouter_api_key(
-    db: &Arc<Connection>,
+    db: &Connection,
     chat_id: ChatId,
     openrouter_api_key: Option<&str>,
 ) {
@@ -258,7 +253,7 @@ pub async fn set_openrouter_api_key(
     }
 }
 
-pub async fn set_model_id(db: &Arc<Connection>, chat_id: ChatId, model_id: Option<&str>) {
+pub async fn set_model_id(db: &Connection, chat_id: ChatId, model_id: Option<&str>) {
     let model_id = model_id.map(|s| s.to_owned());
 
     let updated = db
@@ -279,7 +274,7 @@ pub async fn set_model_id(db: &Arc<Connection>, chat_id: ChatId, model_id: Optio
     }
 }
 
-pub async fn set_system_prompt(db: &Arc<Connection>, chat_id: ChatId, system_prompt: Option<&str>) {
+pub async fn set_system_prompt(db: &Connection, chat_id: ChatId, system_prompt: Option<&str>) {
     let system_prompt = system_prompt.map(|s| s.to_owned());
 
     let updated = db
@@ -300,7 +295,7 @@ pub async fn set_system_prompt(db: &Arc<Connection>, chat_id: ChatId, system_pro
     }
 }
 
-pub async fn set_user_name(db: &Arc<Connection>, chat_id: ChatId, user_name: Option<&str>) {
+pub async fn set_user_name(db: &Connection, chat_id: ChatId, user_name: Option<&str>) {
     let user_name = user_name.map(|s| s.to_owned());
 
     let updated = db
@@ -322,7 +317,7 @@ pub async fn set_user_name(db: &Arc<Connection>, chat_id: ChatId, user_name: Opt
 }
 
 pub async fn set_is_authorized(
-    db: &Arc<Connection>,
+    db: &Connection,
     chat_id: ChatId,
     is_authorized: bool,
 ) -> anyhow::Result<()> {
@@ -346,7 +341,7 @@ pub async fn set_is_authorized(
     }
 }
 
-pub async fn list_unauthorized_chats(db: &Arc<Connection>) -> Vec<(i64, Option<String>)> {
+pub async fn list_unauthorized_chats(db: &Connection) -> Vec<(i64, Option<String>)> {
     db.call(|conn| {
         let mut stmt = conn
             .prepare(

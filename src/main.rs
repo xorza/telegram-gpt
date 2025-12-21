@@ -24,23 +24,6 @@ use typing::TypingIndicator;
 
 const DEFAULT_MODEL_FALLBACK: &str = "xiaomi/mimo-v2-flash:free";
 
-/// Return a minimally identifying, masked version of an API key, e.g. `sk-or-v1-bab...68c`.
-fn mask_api_key(key: &str) -> String {
-    if key.len() <= 8 {
-        // Very short keys: show first up to 3 chars and mask the rest.
-        let prefix_len = key.len().min(3);
-        return format!("{}***", &key[..prefix_len]);
-    }
-
-    let prefix_len = key.len().min(11);
-    let suffix_len = key.len().saturating_sub(prefix_len).clamp(1, 3);
-
-    let prefix = &key[..prefix_len];
-    let suffix = &key[key.len().saturating_sub(suffix_len)..];
-
-    format!("{prefix}...{suffix}")
-}
-
 #[derive(Debug, Clone)]
 struct App {
     bot: Bot,
@@ -48,7 +31,7 @@ struct App {
     http_client: reqwest::Client,
     models: Arc<RwLock<Vec<openrouter_api::ModelSummary>>>,
     conversations: Arc<Mutex<HashMap<ChatId, Conversation>>>,
-    db: Arc<tokio_rusqlite::Connection>,
+    db: tokio_rusqlite::Connection,
     system_prompt0: conversation::Message,
     default_model: String,
 }
@@ -101,7 +84,7 @@ async fn init() -> App {
         .username
         .unwrap_or_default();
     let models = models::spawn_model_refresh(http_client.clone()).await;
-    let db = Arc::new(db::init_db().await);
+    let db = db::init_db().await;
     let conversations: Arc<Mutex<HashMap<ChatId, Conversation>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let system_text0 = "You are a Telegram bot. In group chats you may see many messages, but only treat the latest message that explicitly mentions @<bot_name> (or replies to you) as the user's prompt; ignore the rest. Respond in plain text only (no Markdown).".to_string();
@@ -774,3 +757,20 @@ enum LlmRequestError {
 }
 
 type LlmRequestResult = Result<LlmRequestReady, LlmRequestError>;
+
+/// Return a minimally identifying, masked version of an API key, e.g. `sk-or-v1-bab...68c`.
+fn mask_api_key(key: &str) -> String {
+    if key.len() <= 8 {
+        // Very short keys: show first up to 3 chars and mask the rest.
+        let prefix_len = key.len().min(3);
+        return format!("{}***", &key[..prefix_len]);
+    }
+
+    let prefix_len = key.len().min(11);
+    let suffix_len = key.len().saturating_sub(prefix_len).clamp(1, 3);
+
+    let prefix = &key[..prefix_len];
+    let suffix = &key[key.len().saturating_sub(suffix_len)..];
+
+    format!("{prefix}...{suffix}")
+}
