@@ -297,13 +297,18 @@ impl App {
                 if key.is_empty() {
                     let current_key = {
                         let conv = self.get_conversation(chat_id).await;
-                        conv.openrouter_api_key
-                            .clone()
-                            .unwrap_or_else(|| "None".to_string())
+                        conv.openrouter_api_key.clone()
                     };
-                    self.bot
-                        .send_message(chat_id, format!("Current API key: `{}`", current_key))
-                        .await?;
+                    match current_key {
+                        Some(key) => {
+                            self.bot
+                                .send_message(chat_id, format!("Current API key: `{}`", key))
+                                .await?;
+                        }
+                        None => {
+                            self.bot.send_message(chat_id, "No API key set.").await?;
+                        }
+                    }
                 } else {
                     {
                         let mut conv = self.get_conversation(chat_id).await;
