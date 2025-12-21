@@ -163,6 +163,10 @@ impl App {
         }
 
         let user_message = self.extract_user_message(chat_id, &msg).await?;
+        if user_message.text.starts_with("/") {
+            self.process_command(chat_id, &user_message).await?;
+            return Ok(());
+        }
 
         let (payload, openai_api_key) = match self.prepare_llm_request(chat_id, &user_message).await
         {
@@ -220,13 +224,50 @@ impl App {
         Ok(())
     }
 
+    async fn process_command(
+        &self,
+        chat_id: ChatId,
+        user_message: &conversation::Message,
+    ) -> anyhow::Result<()> {
+        let command = user_message.text.split_whitespace().next().unwrap();
+        match command {
+            "/models" => {
+                let models = self.models.read().await;
+                let models = models
+                    .iter()
+                    .filter_map(|f| {
+                        if f.id.starts_with("openai")
+                            || f.id.starts_with("anthropic")
+                            || f.id.starts_with("google")
+                            || f.id.starts_with("x-ai")
+                            || f.id.starts_with("deepseek")
+                        {
+                            Some(f.id.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                self.bot
+                    .send_message(chat_id, format!("Available models: {}", models))
+                    .await?;
+            }
+            _ => {
+                self.bot.send_message(chat_id, "Unknown command").await?;
+            }
+        }
+        Ok(())
+    }
+
     async fn extract_user_message(
         &self,
         chat_id: ChatId,
         msg: &Message,
     ) -> anyhow::Result<conversation::Message> {
         let user_text = match msg.text() {
-            Some(t) => t.to_owned(),
+            Some(t) => t.trim().to_owned(),
             None => {
                 self.bot
                     .send_message(chat_id, "Only text messages are supported.")
