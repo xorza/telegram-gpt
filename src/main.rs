@@ -224,7 +224,7 @@ impl App {
         let mut buffer = String::new();
         let mut buffer_len = 0usize;
 
-        for token in text.split_inclusive(|c| c == ' ' || c == '\n') {
+        for token in text.split_inclusive([' ', '\n']) {
             let token_len = token.chars().count();
             if buffer_len + token_len > TELEGRAM_MAX_MESSAGE_LENGTH && !buffer.is_empty() {
                 self.bot.send_message(chat_id, &buffer).await?;
@@ -244,19 +244,19 @@ impl App {
     }
 
     async fn maybe_update_user_name(&self, msg: &Message) {
-        let Some(user) = msg.from() else {
+        let Some(user) = msg.from.as_ref() else {
             return;
         };
 
         let user_name = user.username.clone().or_else(|| {
             let mut name = user.first_name.clone();
-            if let Some(last) = user.last_name.as_ref() {
-                if !last.is_empty() {
-                    if !name.is_empty() {
-                        name.push(' ');
-                    }
-                    name.push_str(last);
+            if let Some(last) = user.last_name.as_ref()
+                && !last.is_empty()
+            {
+                if !name.is_empty() {
+                    name.push(' ');
                 }
+                name.push_str(last);
             }
             if name.is_empty() { None } else { Some(name) }
         });

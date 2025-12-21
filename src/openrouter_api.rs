@@ -299,36 +299,15 @@ mod tests {
 
         let payload = prepare_payload(&model, std::iter::once(&user_message), false);
 
-        let buffer = std::sync::Arc::new(tokio::sync::Mutex::new(String::new()));
-        let buffer_clone = buffer.clone();
+        let result = send(&http, &api_key, payload).await.expect("send failed");
 
-        let result = send_no_streaming(
-            &http,
-            &api_key,
-            payload,
-            move |delta: String, finalize: bool| {
-                let buffer = buffer_clone.clone();
-                async move {
-                    let mut buf = buffer.lock().await;
-                    buf.push_str(&delta);
-                    if finalize {
-                        println!("Model reponse: {}", buf);
-                    }
-                    Ok(())
-                }
-            },
-        )
-        .await
-        .expect("send_no_streaming failed");
-
-        let captured = buffer.lock().await.clone();
         assert!(
             result.completion_tokens > 0,
             "LLM response should not be empty"
         );
         assert!(
-            !captured.trim().is_empty(),
-            "on_delta should have received content"
+            !result.completion_text.trim().is_empty(),
+            "response should contain content"
         );
     }
 }
