@@ -230,11 +230,44 @@ impl App {
             return Ok(());
         }
 
+        fn split_long_token(token: &str, max_len: usize) -> Vec<String> {
+            let mut parts = Vec::new();
+            let mut buffer = String::new();
+            let mut buffer_len = 0usize;
+
+            for ch in token.chars() {
+                if buffer_len == max_len {
+                    parts.push(buffer);
+                    buffer = String::new();
+                    buffer_len = 0;
+                }
+                buffer.push(ch);
+                buffer_len += 1;
+            }
+
+            if !buffer.is_empty() {
+                parts.push(buffer);
+            }
+
+            parts
+        }
+
         let mut buffer = String::new();
         let mut buffer_len = 0usize;
 
         for token in text.split_inclusive([' ', '\n']) {
             let token_len = token.chars().count();
+            if token_len > TELEGRAM_MAX_MESSAGE_LENGTH {
+                if !buffer.is_empty() {
+                    self.bot.send_message(chat_id, &buffer).await?;
+                    buffer.clear();
+                    buffer_len = 0;
+                }
+                for part in split_long_token(token, TELEGRAM_MAX_MESSAGE_LENGTH) {
+                    self.bot.send_message(chat_id, &part).await?;
+                }
+                continue;
+            }
             if buffer_len + token_len > TELEGRAM_MAX_MESSAGE_LENGTH && !buffer.is_empty() {
                 self.bot.send_message(chat_id, &buffer).await?;
                 buffer.clear();
@@ -302,8 +335,12 @@ impl App {
         chat_id: ChatId,
         user_message: &conversation::Message,
     ) -> anyhow::Result<()> {
-        let command = match parse_command(user_message.text.as_str()) {
-            Ok(command) => command,
+        let command = match parse_command(user_message.text.as_str(), &self.bot_username) {
+            Ok(Some(command)) => command,
+            Ok(None) => {
+                // Command addressed to a different bot; ignore silently.
+                return Ok(());
+            }
             Err(message) => {
                 log::warn!("Failed to parse command: {}", message);
                 self.bot.send_message(chat_id, message).await?;
@@ -314,7 +351,18 @@ impl App {
         log::info!("Received command: {:?}", command);
         match command {
             Command::Help | Command::Start => {
-                unimplemented!()
+                let message = [
+                    "Commands:",
+                    "/help - show this help",
+                    "/start - show this help",
+                    "/models - list available models",
+                    "/model [id|none] - show or set model",
+                    "/key [key|none] - show or set API key",
+                    "/systemprompt [text|none] - show or set system prompt",
+                    "/approve [chat_id true|false] - admin only",
+                ]
+                .join("\n");
+                self.bot_split_send(chat_id, &message).await?;
             }
             Command::Models => {
                 let models = self.models.read().await;
@@ -654,7 +702,7 @@ impl CommandArg {
                     CommandArg::Text(trimmed.to_string())
                 }
             }
-            None => CommandArg::None,
+            None => CommandArg::Empty,
         }
     }
 }
@@ -684,68 +732,86 @@ enum ApproveArg {
     ApproveChat { chat_id: u64, is_authorized: bool },
 }
 
-fn parse_command(text: &str) -> Result<Command, String> {
+fn parse_command(text: &str, bot_username: &str) -> Result<Option<Command>, String> {
     let trimmed = text.trim();
     if !trimmed.starts_with('/') {
         return Err("Unknown command".to_string());
     }
 
-    let parts = trimmed
-        .trim_start_matches('/')
-        .splitn(2, ' ')
-        .collect::<Vec<&str>>();
-    let cmd = parts.first();
-    if cmd.is_none() {
-        return Err("Unknown command".to_string());
+    let without_slash = trimmed.trim_start_matches('/');
+    let (cmd_part, args_part) = match without_slash.find(char::is_whitespace) {
+        Some(idx) => (
+            &without_slash[..idx],
+            Some(without_slash[idx..].trim_start()),
+        ),
+        None => (without_slash, None),
+    };
+    let args_part = args_part.and_then(|args| if args.is_empty() { None } else { Some(args) });
+
+    let (cmd_name, mention) = match cmd_part.split_once('@') {
+        Some((cmd, mention)) => (cmd, Some(mention)),
+        None => (cmd_part, None),
+    };
+
+    if let Some(mention) = mention {
+        if !mention.eq_ignore_ascii_case(bot_username) {
+            return Ok(None);
+        }
     }
 
-    let cmd = cmd.unwrap();
-    let args = parts.get(1).copied();
-
-    match cmd.to_ascii_lowercase().as_str() {
+    match cmd_name.to_ascii_lowercase().as_str() {
         "help" => {
-            if args.is_none() {
-                Ok(Command::Help)
+            if args_part.is_none() {
+                Ok(Some(Command::Help))
+            } else {
+                Err("Unknown command".to_string())
+            }
+        }
+        "start" => {
+            if args_part.is_none() {
+                Ok(Some(Command::Start))
             } else {
                 Err("Unknown command".to_string())
             }
         }
         "models" => {
-            if args.is_none() {
-                Ok(Command::Models)
+            if args_part.is_none() {
+                Ok(Some(Command::Models))
             } else {
                 Err("Unknown command".to_string())
             }
         }
-        "model" => Ok(Command::Model(CommandArg::from_text(args))),
-        "key" => Ok(Command::Key(CommandArg::from_text(args))),
-        "systemprompt" => Ok(Command::SystemPrompt(CommandArg::from_text(args))),
+        "model" => Ok(Some(Command::Model(CommandArg::from_text(args_part)))),
+        "key" => Ok(Some(Command::Key(CommandArg::from_text(args_part)))),
+        "systemprompt" => Ok(Some(Command::SystemPrompt(CommandArg::from_text(
+            args_part,
+        )))),
         "approve" => {
-            if args.is_none() {
-                return Ok(Command::Approve(ApproveArg::Empty));
+            if args_part.is_none() {
+                return Ok(Some(Command::Approve(ApproveArg::Empty)));
             }
-            let args = args.unwrap().split_whitespace().collect::<Vec<&str>>();
+            let args = args_part.unwrap().split_whitespace().collect::<Vec<&str>>();
             if args.len() != 2 {
-                return Ok(Command::Approve(ApproveArg::Invalid));
+                return Ok(Some(Command::Approve(ApproveArg::Invalid)));
             }
 
             let chat_id: u64 = match args[0].parse() {
                 Ok(value) => value,
                 Err(_) => {
-                    return Ok(Command::Approve(ApproveArg::Invalid));
+                    return Ok(Some(Command::Approve(ApproveArg::Invalid)));
                 }
             };
             let is_authorized = match args[1].to_ascii_lowercase().as_str() {
                 "true" | "1" => true,
                 "false" | "0" => false,
                 _ => {
-                    return Ok(Command::Approve(ApproveArg::Invalid));
+                    return Ok(Some(Command::Approve(ApproveArg::Invalid)));
                 }
             };
-            Ok(Command::Approve(ApproveArg::ApproveChat {
+            Ok(Some(Command::Approve(ApproveArg::ApproveChat {
                 chat_id,
                 is_authorized,
-            }))
+            })))
         }
         _ => Err("Unknown command".to_string()),
     }
