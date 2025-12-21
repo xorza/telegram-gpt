@@ -5,7 +5,7 @@ use crate::openrouter_api;
 
 #[derive(Debug)]
 pub struct Conversation {
-    pub chat_id: u64,
+    pub chat_id: i64,
     pub history: VecDeque<Message>,
     pub is_authorized: bool,
     pub is_admin: bool,

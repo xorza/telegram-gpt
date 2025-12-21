@@ -18,7 +18,7 @@ use std::{collections::HashMap, sync::Arc};
 use telegram::escape_markdown_v2;
 use teloxide::{
     prelude::*,
-    types::{ChatId, MessageId, ReactionType},
+    types::{ChatId, MessageId, ParseMode, ReactionType},
 };
 use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard, RwLock};
 use typing::TypingIndicator;
@@ -277,7 +277,11 @@ impl App {
                             || f.id.starts_with("x-ai")
                             || f.id.starts_with("deepseek")
                         {
-                            Some(f.id.clone())
+                            Some(format!(
+                                "`{}` \\- {}",
+                                telegram::escape_markdown_v2(&f.id),
+                                telegram::escape_markdown_v2(&f.name)
+                            ))
                         } else {
                             None
                         }
@@ -285,8 +289,11 @@ impl App {
                     .collect::<Vec<_>>()
                     .join("\n");
 
-                let message = format!("Available models:\n{}", models);
-                telegram::bot_split_send(&self.bot, chat_id, &message, None).await?;
+                let message = format!("Available models\\:\n{}", models);
+                self.bot
+                    .send_message(chat_id, message)
+                    .parse_mode(ParseMode::MarkdownV2)
+                    .await?;
             }
             commands::Command::Model(arg) => match arg {
                 commands::CommandArg::Empty => {
@@ -455,7 +462,7 @@ impl App {
                         let message = format!("Pending users:\n{}", lines.join("\n"));
                         self.bot
                             .send_message(chat_id, &message)
-                            .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+                            .parse_mode(ParseMode::MarkdownV2)
                             .await?;
                     }
                     commands::ApproveArg::ApproveChat {

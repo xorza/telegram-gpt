@@ -138,7 +138,7 @@ pub async fn load_conversation(db: &Arc<Mutex<Connection>>, chat_id: ChatId) -> 
         });
 
     Conversation {
-        chat_id: chat_id.0 as u64,
+        chat_id: chat_id.0,
         history: Default::default(),
         is_authorized,
         is_admin,

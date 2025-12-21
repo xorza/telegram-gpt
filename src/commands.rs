@@ -47,7 +47,7 @@ pub enum Command {
 pub enum ApproveArg {
     Empty,
     Invalid,
-    ApproveChat { chat_id: u64, is_authorized: bool },
+    ApproveChat { chat_id: i64, is_authorized: bool },
 }
 
 pub fn parse_command(text: &str, bot_username: &str) -> Result<Command, String> {
@@ -111,7 +111,7 @@ pub fn parse_command(text: &str, bot_username: &str) -> Result<Command, String> 
                 return Ok(Command::Approve(ApproveArg::Invalid));
             }
 
-            let chat_id: u64 = match args[0].parse() {
+            let chat_id: i64 = match args[0].parse() {
                 Ok(value) => value,
                 Err(_) => {
                     return Ok(Command::Approve(ApproveArg::Invalid));
