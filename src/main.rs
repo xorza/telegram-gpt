@@ -251,7 +251,7 @@ impl App {
                     .join("\n");
 
                 self.bot
-                    .send_message(chat_id, format!("Available models: {}", models))
+                    .send_message(chat_id, format!("Available models:\n{}", models))
                     .await?;
             }
             _ => {
