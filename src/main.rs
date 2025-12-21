@@ -269,27 +269,38 @@ impl App {
             }
             "/model" => {
                 let model_id = user_message.text.trim_start_matches("/model").trim();
-                let available_models = self.models.read().await;
-                let selected_model = available_models.iter().find(|m| m.id == model_id);
-
-                if let Some(model) = selected_model {
-                    {
-                        let mut conv = self.get_conversation(chat_id).await;
-                        conv.model_id = Some(model.id.clone());
-                    }
-                    log::info!("User {} selected model: `{}`", chat_id, model.name);
+                if model_id.is_empty() {
+                    let current_model_id = {
+                        let conv = self.get_conversation(chat_id).await;
+                        conv.model_id.clone()
+                    };
+                    let model = self.resolve_model(current_model_id.as_deref()).await;
                     self.bot
-                        .send_message(chat_id, format!("Selected model: `{}`", model.name))
+                        .send_message(chat_id, format!("Current model: `{}`", model.id))
                         .await?;
                 } else {
-                    log::warn!(
-                        "User {} tried to select non-existent model: `{}`",
-                        chat_id,
-                        model_id
-                    );
-                    self.bot
-                        .send_message(chat_id, format!("Model not found: `{}`", model_id))
-                        .await?;
+                    let available_models = self.models.read().await;
+                    let selected_model = available_models.iter().find(|m| m.id == model_id);
+
+                    if let Some(model) = selected_model {
+                        {
+                            let mut conv = self.get_conversation(chat_id).await;
+                            conv.model_id = Some(model.id.clone());
+                        }
+                        log::info!("User {} selected model: `{}`", chat_id, model.name);
+                        self.bot
+                            .send_message(chat_id, format!("Selected model: `{}`", model.name))
+                            .await?;
+                    } else {
+                        log::warn!(
+                            "User {} tried to select non-existent model: `{}`",
+                            chat_id,
+                            model_id
+                        );
+                        self.bot
+                            .send_message(chat_id, format!("Model not found: `{}`", model_id))
+                            .await?;
+                    }
                 }
             }
             "/key" => {
