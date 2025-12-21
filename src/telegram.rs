@@ -1,7 +1,8 @@
+use crate::panic_handler::fatal_panic;
 use teloxide::{
     payloads::SendMessageSetters,
     prelude::{Bot, Requester},
-    types::{ChatId, MessageId, ReplyParameters},
+    types::{ChatId, MessageId, ParseMode, ReplyParameters},
 };
 
 const TELEGRAM_MAX_MESSAGE_LENGTH: usize = 4096;
@@ -9,6 +10,39 @@ const TELEGRAM_MAX_MESSAGE_LENGTH: usize = 4096;
 /// Escape a string so it is safe to send with `ParseMode::MarkdownV2`.
 pub fn escape_markdown_v2(text: &str) -> String {
     teloxide::utils::markdown::escape(text)
+}
+
+async fn send_formatted_checked(
+    bot: &Bot,
+    chat_id: ChatId,
+    text: &str,
+    reply_to: Option<MessageId>,
+    parse_mode: ParseMode,
+) -> anyhow::Result<()> {
+    assert!(
+        text.chars().count() <= TELEGRAM_MAX_MESSAGE_LENGTH,
+        "message exceeds telegram max length"
+    );
+
+    match reply_to {
+        Some(reply_id) => {
+            let reply = ReplyParameters {
+                message_id: reply_id,
+                ..Default::default()
+            };
+            bot.send_message(chat_id, text)
+                .reply_parameters(reply)
+                .parse_mode(parse_mode.clone())
+                .await?;
+        }
+        None => {
+            bot.send_message(chat_id, text)
+                .parse_mode(parse_mode.clone())
+                .await?;
+        }
+    }
+
+    Ok(())
 }
 
 pub async fn send_message_checked(
@@ -35,6 +69,52 @@ pub async fn send_message_checked(
         None => {
             bot.send_message(chat_id, text).await?;
         }
+    }
+
+    Ok(())
+}
+
+/// Send a formatted message (e.g., MarkdownV2), splitting only on newlines.
+/// Calls `fatal_panic` if any single line exceeds Telegram's maximum length.
+pub async fn bot_split_send_formatted(
+    bot: &Bot,
+    chat_id: ChatId,
+    text: &str,
+    reply_to: Option<MessageId>,
+    parse_mode: ParseMode,
+) -> anyhow::Result<()> {
+    if text.chars().count() <= TELEGRAM_MAX_MESSAGE_LENGTH {
+        return send_formatted_checked(bot, chat_id, text, reply_to, parse_mode).await;
+    }
+
+    let mut buffer = String::new();
+    let mut buffer_len = 0usize;
+
+    for line in text.split('\n') {
+        let line_len = line.chars().count();
+        let required = line_len + if buffer.is_empty() { 0 } else { 1 }; // include newline
+
+        if line_len > TELEGRAM_MAX_MESSAGE_LENGTH {
+            fatal_panic("Formatted message contains a line longer than Telegram allows");
+        }
+
+        if buffer_len + required > TELEGRAM_MAX_MESSAGE_LENGTH {
+            send_formatted_checked(bot, chat_id, &buffer, reply_to, parse_mode.clone()).await?;
+            buffer.clear();
+            buffer_len = 0;
+        }
+
+        if !buffer.is_empty() {
+            buffer.push('\n');
+            buffer_len += 1;
+        }
+
+        buffer.push_str(line);
+        buffer_len += line_len;
+    }
+
+    if !buffer.is_empty() {
+        send_formatted_checked(bot, chat_id, &buffer, reply_to, parse_mode).await?;
     }
 
     Ok(())

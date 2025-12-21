@@ -15,7 +15,7 @@ use conversation::{Conversation, MessageRole};
 use flexi_logger::{Cleanup, Criterion, Duplicate, FileSpec, Logger, Naming};
 use rusqlite::Connection;
 use std::{collections::HashMap, sync::Arc};
-use telegram::escape_markdown_v2;
+use telegram::{bot_split_send_formatted, escape_markdown_v2};
 use teloxide::{
     prelude::*,
     types::{ChatId, MessageId, ParseMode, ReactionType},
@@ -290,9 +290,7 @@ impl App {
                     .join("\n");
 
                 let message = format!("Available models\\:\n{}", models);
-                self.bot
-                    .send_message(chat_id, message)
-                    .parse_mode(ParseMode::MarkdownV2)
+                bot_split_send_formatted(&self.bot, chat_id, &message, None, ParseMode::MarkdownV2)
                     .await?;
             }
             commands::Command::Model(arg) => match arg {
@@ -460,10 +458,14 @@ impl App {
                         }
 
                         let message = format!("Pending users:\n{}", lines.join("\n"));
-                        self.bot
-                            .send_message(chat_id, &message)
-                            .parse_mode(ParseMode::MarkdownV2)
-                            .await?;
+                        bot_split_send_formatted(
+                            &self.bot,
+                            chat_id,
+                            &message,
+                            None,
+                            ParseMode::MarkdownV2,
+                        )
+                        .await?;
                     }
                     commands::ApproveArg::ApproveChat {
                         chat_id: target_chat_id,
