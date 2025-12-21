@@ -264,7 +264,7 @@ impl App {
                     "/models - list available models",
                     "/model [id|none] - show or set model",
                     "/key [key|none] - show or set API key",
-                    "/systemprompt [text|none] - show or set system prompt",
+                    "/system_prompt [text|none] - show or set system prompt",
                     "/approve [chat_id true|false] - admin only",
                 ]
                 .join("\n");

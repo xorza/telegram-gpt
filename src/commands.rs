@@ -101,7 +101,7 @@ pub fn parse_command(text: &str, bot_username: &str) -> Result<Command, String> 
         }
         "model" => Ok(Command::Model(CommandArg::from_text(args_part))),
         "key" => Ok(Command::Key(CommandArg::from_text(args_part))),
-        "systemprompt" => Ok(Command::SystemPrompt(CommandArg::from_text(args_part))),
+        "system_prompt" => Ok(Command::SystemPrompt(CommandArg::from_text(args_part))),
         "approve" => {
             if args_part.is_none() {
                 return Ok(Command::Approve(ApproveArg::Empty));
