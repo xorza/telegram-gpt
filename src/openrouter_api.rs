@@ -40,8 +40,6 @@ struct ModelRecord {
 struct TopProvider {
     context_length: Option<u64>,
     max_completion_tokens: Option<u64>,
-    #[allow(dead_code)]
-    is_moderated: bool,
 }
 
 #[derive(Debug)]
@@ -127,7 +125,6 @@ where
     })
 }
 
-#[allow(dead_code)]
 pub async fn send(
     http: &Client,
     api_key: &str,
