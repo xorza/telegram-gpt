@@ -353,6 +353,7 @@ impl App {
                                     telegram::escape_markdown_v2(&model.name)
                                 ),
                             )
+                            .parse_mode(ParseMode::MarkdownV2)
                             .await?;
                     } else {
                         log::warn!(
@@ -368,6 +369,7 @@ impl App {
                                     telegram::escape_markdown_v2(&model_id)
                                 ),
                             )
+                            .parse_mode(ParseMode::MarkdownV2)
                             .await?;
                     }
                 }
