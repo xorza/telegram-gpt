@@ -281,3 +281,38 @@ pub async fn set_user_name(db: &Arc<Mutex<Connection>>, chat_id: ChatId, user_na
         ));
     }
 }
+
+pub async fn set_is_authorized(db: &Arc<Mutex<Connection>>, chat_id: ChatId, is_authorized: bool) {
+    let conn = db.lock().await;
+    let updated = conn
+        .execute(
+            "UPDATE chats SET is_authorized = ?2 WHERE chat_id = ?1",
+            rusqlite::params![chat_id.0, is_authorized],
+        )
+        .expect("failed to update is_authorized");
+
+    if updated != 1 {
+        fatal_panic(format!(
+            "failed to update is_authorized for chat_id {} (updated {})",
+            chat_id.0, updated
+        ));
+    }
+}
+
+pub async fn list_unauthorized_chats(db: &Arc<Mutex<Connection>>) -> Vec<(i64, Option<String>)> {
+    let conn = db.lock().await;
+    let mut stmt = conn
+        .prepare("SELECT chat_id, user_name FROM chats WHERE is_authorized = 0 ORDER BY chat_id")
+        .expect("failed to prepare unauthorized chats query");
+
+    let rows = stmt
+        .query_map([], |row| {
+            let chat_id: i64 = row.get(0)?;
+            let user_name: Option<String> = row.get(1)?;
+            Ok((chat_id, user_name))
+        })
+        .expect("failed to query unauthorized chats")
+        .filter_map(|row| row.ok());
+
+    rows.collect()
+}

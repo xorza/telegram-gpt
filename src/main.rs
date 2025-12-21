@@ -302,21 +302,18 @@ impl App {
         chat_id: ChatId,
         user_message: &conversation::Message,
     ) -> anyhow::Result<()> {
-        let command = match Command::parse(user_message.text.as_str(), &self.bot_username) {
+        let command = match parse_command(user_message.text.as_str(), &self.bot_username) {
             Ok(command) => command,
-            Err(err) => {
-                log::warn!("Failed to parse command: {err}");
-                self.bot.send_message(chat_id, "Unknown command").await?;
+            Err(message) => {
+                self.bot.send_message(chat_id, message).await?;
                 return Ok(());
             }
         };
 
         log::info!("Received command: {:?}", command);
         match command {
-            Command::Help => {
-                self.bot
-                    .send_message(chat_id, Command::descriptions().to_string())
-                    .await?;
+            Command::Help | Command::Start => {
+                unimplemented!()
             }
             Command::Models => {
                 let models = self.models.read().await;
@@ -340,7 +337,7 @@ impl App {
                 let message = format!("Available models:\n{}", models);
                 self.bot_split_send(chat_id, &message).await?;
             }
-            Command::Model(arg) => match CommandArg::from_text(&arg) {
+            Command::Model(arg) => match arg {
                 CommandArg::Empty => {
                     let current_model_id = {
                         let conv = self.get_conversation(chat_id).await;
@@ -387,7 +384,7 @@ impl App {
                     }
                 }
             },
-            Command::Key(arg) => match CommandArg::from_text(&arg) {
+            Command::Key(arg) => match arg {
                 CommandArg::Empty => {
                     let current_key = {
                         let conv = self.get_conversation(chat_id).await;
@@ -421,7 +418,7 @@ impl App {
                     self.bot.send_message(chat_id, "API key updated.").await?;
                 }
             },
-            Command::SystemPrompt(arg) => match CommandArg::from_text(&arg) {
+            Command::SystemPrompt(arg) => match arg {
                 CommandArg::Empty => {
                     let current_prompt = {
                         let conv = self.get_conversation(chat_id).await;
@@ -467,6 +464,57 @@ impl App {
                         .await?;
                 }
             },
+            Command::Approve(approve) => {
+                let is_admin = { self.get_conversation(chat_id).await.is_admin };
+                if !is_admin {
+                    self.bot
+                        .send_message(chat_id, "You are not authorized to use /approve.")
+                        .await?;
+                    return Ok(());
+                }
+
+                match approve {
+                    ApproveArg::Empty => {
+                        let pending = db::list_unauthorized_chats(&self.db).await;
+                        if pending.is_empty() {
+                            self.bot.send_message(chat_id, "No pending users.").await?;
+                            return Ok(());
+                        }
+
+                        let mut lines = Vec::with_capacity(pending.len());
+                        for (pending_id, name) in pending {
+                            let display_name = name.unwrap_or_else(|| "unknown".to_string());
+                            lines.push(format!("{} - {}", pending_id, display_name));
+                        }
+
+                        let message = format!("Pending users:\n{}", lines.join("\n"));
+                        self.bot_split_send(chat_id, &message).await?;
+                    }
+                    ApproveArg::ApproveChat {
+                        chat_id: target_chat_id,
+                        is_authorized,
+                    } => {
+                        let target_id = ChatId(target_chat_id as i64);
+                        db::set_is_authorized(&self.db, target_id, is_authorized).await;
+
+                        let mut conv_map = self.conversations.lock().await;
+                        if let Some(conv) = conv_map.get_mut(&target_id) {
+                            conv.is_authorized = is_authorized;
+                        }
+
+                        let message = format!(
+                            "Updated chat {} is_authorized={}",
+                            target_chat_id, is_authorized
+                        );
+                        self.bot.send_message(chat_id, message).await?;
+                    }
+                    ApproveArg::Invalid => {
+                        self.bot
+                            .send_message(chat_id, "Usage: /approve <chat_id> <true|false>")
+                            .await?;
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -585,6 +633,7 @@ impl App {
     }
 }
 
+#[derive(Debug)]
 enum CommandArg {
     Empty,
     None,
@@ -604,19 +653,101 @@ impl CommandArg {
     }
 }
 
-#[derive(BotCommands, Clone, Debug)]
-#[command(rename_rule = "lowercase", description = "Available commands:")]
+#[derive(Debug)]
 enum Command {
     /// Show this help text.
     Help,
+    /// Show this help text.
+    Start,
     /// List available models.
     Models,
     /// Get/set the model (use `none` to clear).
-    Model(String),
+    Model(CommandArg),
     /// Get/set the API key (use `none` to clear).
-    Key(String),
+    Key(CommandArg),
     /// Get/set the system prompt (use `none` to clear).
-    SystemPrompt(String),
+    SystemPrompt(CommandArg),
+    /// List or update chat authorization.
+    Approve(ApproveArg),
+}
+
+#[derive(Debug)]
+enum ApproveArg {
+    Empty,
+    Invalid,
+    ApproveChat { chat_id: u64, is_authorized: bool },
+}
+
+fn parse_command(text: &str, bot_username: &str) -> Result<Command, String> {
+    let trimmed = text.trim();
+    if !trimmed.starts_with('/') {
+        return Err("Unknown command".to_string());
+    }
+
+    let mut parts = trimmed.split_whitespace();
+    let raw_cmd = parts.next().unwrap_or_default();
+    let mut cmd = raw_cmd.trim_start_matches('/');
+    let mut targeted = None;
+    if let Some((name, user)) = cmd.split_once('@') {
+        cmd = name;
+        targeted = Some(user);
+    }
+
+    if let Some(user) = targeted {
+        if !user.eq_ignore_ascii_case(bot_username) {
+            return Err("Unknown command".to_string());
+        }
+    }
+
+    let args: Vec<&str> = parts.collect();
+    let arg_text = args.join(" ");
+
+    match cmd.to_ascii_lowercase().as_str() {
+        "help" => {
+            if args.is_empty() {
+                Ok(Command::Help)
+            } else {
+                Err("Unknown command".to_string())
+            }
+        }
+        "models" => {
+            if args.is_empty() {
+                Ok(Command::Models)
+            } else {
+                Err("Unknown command".to_string())
+            }
+        }
+        "model" => Ok(Command::Model(CommandArg::from_text(&arg_text))),
+        "key" => Ok(Command::Key(CommandArg::from_text(&arg_text))),
+        "systemprompt" => Ok(Command::SystemPrompt(CommandArg::from_text(&arg_text))),
+        "approve" => {
+            if args.is_empty() {
+                return Ok(Command::Approve(ApproveArg::Empty));
+            }
+            if args.len() != 2 {
+                return Ok(Command::Approve(ApproveArg::Invalid));
+            }
+
+            let chat_id: u64 = match args[0].parse() {
+                Ok(value) => value,
+                Err(_) => {
+                    return Ok(Command::Approve(ApproveArg::Invalid));
+                }
+            };
+            let is_authorized = match args[1].to_ascii_lowercase().as_str() {
+                "true" | "1" => true,
+                "false" | "0" => false,
+                _ => {
+                    return Ok(Command::Approve(ApproveArg::Invalid));
+                }
+            };
+            Ok(Command::Approve(ApproveArg::ApproveChat {
+                chat_id,
+                is_authorized,
+            }))
+        }
+        _ => Err("Unknown command".to_string()),
+    }
 }
 
 #[derive(Debug)]
