@@ -133,8 +133,6 @@ pub async fn bot_split_send(
 
     let mut buffer = String::new();
     let mut buffer_len = 0usize;
-    let mut chunk = String::new();
-    let mut chunk_len = 0usize;
 
     for token in text.split_inclusive([' ', '\n']) {
         let token_len = token.chars().count();
@@ -145,18 +143,13 @@ pub async fn bot_split_send(
                 buffer_len = 0;
             }
             for ch in token.chars() {
-                if chunk_len == TELEGRAM_MAX_MESSAGE_LENGTH {
-                    send_message_checked(bot, chat_id, &chunk, reply_to).await?;
-                    chunk.clear();
-                    chunk_len = 0;
+                buffer.push(ch);
+                buffer_len += 1;
+                if buffer_len == TELEGRAM_MAX_MESSAGE_LENGTH {
+                    send_message_checked(bot, chat_id, &buffer, reply_to).await?;
+                    buffer.clear();
+                    buffer_len = 0;
                 }
-                chunk.push(ch);
-                chunk_len += 1;
-            }
-            if !chunk.is_empty() {
-                send_message_checked(bot, chat_id, &chunk, reply_to).await?;
-                chunk.clear();
-                chunk_len = 0;
             }
             continue;
         }
