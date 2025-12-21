@@ -482,17 +482,36 @@ impl App {
         };
 
         if !user_text.starts_with('/') {
-            if let Some(reply_text) = msg
+            let replied_text = msg
                 .reply_to_message()
                 .and_then(|reply| reply.text())
                 .map(|text| text.trim())
-                .filter(|text| !text.is_empty())
-            {
-                let quoted = reply_text
+                .filter(|text| !text.is_empty());
+
+            if let Some(replied_text) = replied_text {
+                let replied_quoted = replied_text
                     .lines()
                     .map(|line| format!("> {}", line))
                     .collect::<Vec<_>>()
                     .join("\n");
+
+                let selection = msg
+                    .quote()
+                    .map(|quote| quote.text.as_str())
+                    .map(|text| text.trim())
+                    .filter(|text| !text.is_empty())
+                    .map(|text| {
+                        text.lines()
+                            .map(|line| format!("> {}", line))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    });
+
+                let quoted = match selection {
+                    Some(selection) => format!("{}\n\n\n{}", replied_quoted, selection),
+                    None => replied_quoted,
+                };
+
                 user_text = format!("{}\n\n{}", quoted, user_text);
             }
         }

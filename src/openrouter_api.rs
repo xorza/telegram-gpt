@@ -64,6 +64,7 @@ where
 {
     const AVG_BYTES_PER_TOKEN: u64 = 4;
     const PER_MESSAGE_OVERHEAD: u64 = 10;
+    const PER_PROMPT_OVERHEAD: u64 = 10_000;
 
     let (byte_count, message_count) = messages
         .into_iter()
@@ -73,7 +74,7 @@ where
 
     let text_tokens = byte_count.div_ceil(AVG_BYTES_PER_TOKEN);
 
-    text_tokens + message_count * PER_MESSAGE_OVERHEAD
+    text_tokens + message_count * PER_MESSAGE_OVERHEAD + PER_PROMPT_OVERHEAD
 }
 
 pub async fn list_models(http: &Client) -> anyhow::Result<Vec<ModelSummary>> {
@@ -244,7 +245,7 @@ mod tests {
         {
           "data": [
             {
-              "id": "openai/gpt-4",
+              "id": "openai/gpt-3.5-turbo",
               "name": "GPT-4",
               "context_length": 8192,
               "top_provider": {
@@ -261,7 +262,7 @@ mod tests {
 
         assert_eq!(summaries.len(), 1);
         let model = &summaries[0];
-        assert_eq!(model.id, "openai/gpt-4");
+        assert_eq!(model.id, "openai/gpt-3.5-turbo");
         assert_eq!(model.name.as_str(), "GPT-4");
         assert_eq!(model.context_length, 8192);
         assert_eq!(model.max_completion_tokens, 4096);
@@ -289,12 +290,11 @@ mod tests {
         let http = reqwest::Client::new();
         let api_key =
             std::env::var("OPENROUTER_API_KEY").expect("OPENROUTER_API_KEY env var not set");
-        let model = std::env::var("OPENROUTER_TEST_MODEL")
-            .unwrap_or_else(|_| "xiaomi/mimo-v2-flash:free".to_string());
+        let model = "gpt-3.5-turbo".to_string();
 
         let user_message = Message {
             role: MessageRole::User,
-            text: "Say hello in one short sentence.".to_string(),
+            text: "hi".to_string(),
         };
 
         let payload = prepare_payload(&model, std::iter::once(&user_message), false);
