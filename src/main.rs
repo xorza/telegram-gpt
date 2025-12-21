@@ -1,33 +1,28 @@
 #![allow(unused_imports)]
 #![allow(dead_code)]
 
+mod commands;
 mod conversation;
 mod db;
+mod models;
 mod openrouter_api;
 mod panic_handler;
+mod telegram;
 mod typing;
 
 use anyhow::{Context, anyhow};
 use conversation::{Conversation, MessageRole};
 use flexi_logger::{Cleanup, Criterion, Duplicate, FileSpec, Logger, Naming};
-use reqwest::header::PROXY_AUTHENTICATE;
 use rusqlite::Connection;
-use serde_json::Value;
-use std::clone;
-use std::fmt::Debug;
-use std::{collections::HashMap, path::Path, sync::Arc};
-use teloxide::RequestError;
-use teloxide::types::CopyTextButton;
-use teloxide::utils::command::BotCommands;
+use std::{collections::HashMap, sync::Arc};
 use teloxide::{
     prelude::*,
-    types::{ChatId, MessageId, ReactionType, ReplyParameters},
+    types::{ChatId, MessageId, ReactionType},
 };
 use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard, RwLock};
 use typing::TypingIndicator;
 
 const DEFAULT_MODEL_FALLBACK: &str = "xiaomi/mimo-v2-flash:free";
-const TELEGRAM_MAX_MESSAGE_LENGTH: usize = 4096;
 
 #[derive(Debug, Clone)]
 struct App {
@@ -88,7 +83,7 @@ async fn init() -> App {
         .user
         .username
         .unwrap_or_default();
-    let models = spawn_model_refresh(http_client.clone()).await;
+    let models = models::spawn_model_refresh(http_client.clone()).await;
     let db = Arc::new(Mutex::new(db::init_db()));
     let conversations: Arc<Mutex<HashMap<ChatId, Conversation>>> =
         Arc::new(Mutex::new(HashMap::new()));
@@ -112,53 +107,6 @@ async fn init() -> App {
         system_prompt0,
         default_model,
     }
-}
-
-async fn spawn_model_refresh(
-    http_client: reqwest::Client,
-) -> Arc<RwLock<Vec<openrouter_api::ModelSummary>>> {
-    let models = Arc::new(RwLock::new(Vec::new()));
-
-    // Fetch helper keeps the refresh logic in one place.
-    async fn refresh_models(
-        http_client: &reqwest::Client,
-        models: &Arc<RwLock<Vec<openrouter_api::ModelSummary>>>,
-    ) -> anyhow::Result<()> {
-        let latest = openrouter_api::list_models(http_client).await?;
-
-        let mut guard = models.write().await;
-        *guard = latest;
-
-        Ok(())
-    }
-
-    // Run once immediately; keep retrying so we always start with a model list.
-    let mut attempt = 1u32;
-    loop {
-        match refresh_models(&http_client, &models).await {
-            Ok(()) => break,
-            Err(err) => {
-                log::warn!(
-                    "initial model fetch failed (attempt {}): {err}; retrying in 5s",
-                    attempt
-                );
-                attempt += 1;
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            }
-        }
-    }
-
-    let models_clone = models.clone();
-    let http_client = http_client.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(10 * 60));
-        loop {
-            interval.tick().await;
-            refresh_models(&http_client, &models_clone).await.ok();
-        }
-    });
-
-    models
 }
 
 impl App {
@@ -205,8 +153,13 @@ impl App {
                 } else {
                     None
                 };
-                self.bot_split_send(chat_id, &llm_response.completion_text, reply_to)
-                    .await?;
+                telegram::bot_split_send(
+                    &self.bot,
+                    chat_id,
+                    &llm_response.completion_text,
+                    reply_to,
+                )
+                .await?;
                 let assistant_message = conversation::Message {
                     role: MessageRole::Assistant,
                     text: llm_response.completion_text,
@@ -224,96 +177,6 @@ impl App {
                     }])
                     .await?;
             }
-        }
-
-        Ok(())
-    }
-
-    async fn send_message_checked(
-        &self,
-        chat_id: ChatId,
-        text: &str,
-        reply_to: Option<MessageId>,
-    ) -> anyhow::Result<()> {
-        assert!(
-            text.chars().count() <= TELEGRAM_MAX_MESSAGE_LENGTH,
-            "message exceeds telegram max length"
-        );
-
-        match reply_to {
-            Some(reply_id) => {
-                let reply = ReplyParameters {
-                    message_id: reply_id,
-                    ..Default::default()
-                };
-                self.bot
-                    .send_message(chat_id, text)
-                    .reply_parameters(reply)
-                    .await?;
-            }
-            None => {
-                self.bot.send_message(chat_id, text).await?;
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn bot_split_send(
-        &self,
-        chat_id: ChatId,
-        text: &str,
-        reply_to: Option<MessageId>,
-    ) -> anyhow::Result<()> {
-        if text.chars().count() <= TELEGRAM_MAX_MESSAGE_LENGTH {
-            self.send_message_checked(chat_id, text, reply_to).await?;
-            return Ok(());
-        }
-
-        let mut buffer = String::new();
-        let mut buffer_len = 0usize;
-        let mut chunk = String::new();
-        let mut chunk_len = 0usize;
-
-        for token in text.split_inclusive([' ', '\n']) {
-            let token_len = token.chars().count();
-            if token_len > TELEGRAM_MAX_MESSAGE_LENGTH {
-                if !buffer.is_empty() {
-                    self.send_message_checked(chat_id, &buffer, reply_to)
-                        .await?;
-                    buffer.clear();
-                    buffer_len = 0;
-                }
-                for ch in token.chars() {
-                    if chunk_len == TELEGRAM_MAX_MESSAGE_LENGTH {
-                        self.send_message_checked(chat_id, &chunk, reply_to).await?;
-                        chunk.clear();
-                        chunk_len = 0;
-                    }
-                    chunk.push(ch);
-                    chunk_len += 1;
-                }
-                if !chunk.is_empty() {
-                    self.send_message_checked(chat_id, &chunk, reply_to).await?;
-                    chunk.clear();
-                    chunk_len = 0;
-                }
-                continue;
-            }
-            if buffer_len + token_len > TELEGRAM_MAX_MESSAGE_LENGTH && !buffer.is_empty() {
-                self.send_message_checked(chat_id, &buffer, reply_to)
-                    .await?;
-                buffer.clear();
-                buffer_len = 0;
-            }
-
-            buffer.push_str(token);
-            buffer_len += token_len;
-        }
-
-        if !buffer.is_empty() {
-            self.send_message_checked(chat_id, &buffer, reply_to)
-                .await?;
         }
 
         Ok(())
@@ -369,7 +232,8 @@ impl App {
         chat_id: ChatId,
         user_message: &conversation::Message,
     ) -> anyhow::Result<()> {
-        let command = match parse_command(user_message.text.as_str(), &self.bot_username) {
+        let command = match commands::parse_command(user_message.text.as_str(), &self.bot_username)
+        {
             Ok(Some(command)) => command,
             Ok(None) => {
                 // Command addressed to a different bot; ignore silently.
@@ -384,7 +248,7 @@ impl App {
 
         log::info!("Received command: {:?}", command);
         match command {
-            Command::Help | Command::Start => {
+            commands::Command::Help | commands::Command::Start => {
                 let message = [
                     "Commands:",
                     "/help - show this help",
@@ -396,9 +260,9 @@ impl App {
                     "/approve [chat_id true|false] - admin only",
                 ]
                 .join("\n");
-                self.bot_split_send(chat_id, &message, None).await?;
+                telegram::bot_split_send(&self.bot, chat_id, &message, None).await?;
             }
-            Command::Models => {
+            commands::Command::Models => {
                 let models = self.models.read().await;
                 let models = models
                     .iter()
@@ -418,10 +282,10 @@ impl App {
                     .join("\n");
 
                 let message = format!("Available models:\n{}", models);
-                self.bot_split_send(chat_id, &message, None).await?;
+                telegram::bot_split_send(&self.bot, chat_id, &message, None).await?;
             }
-            Command::Model(arg) => match arg {
-                CommandArg::Empty => {
+            commands::Command::Model(arg) => match arg {
+                commands::CommandArg::Empty => {
                     let current_model_id = {
                         let conv = self.get_conversation(chat_id).await;
                         conv.model_id.clone()
@@ -431,7 +295,7 @@ impl App {
                         .send_message(chat_id, format!("Current model: `{}`", model.id))
                         .await?;
                 }
-                CommandArg::None => {
+                commands::CommandArg::None => {
                     {
                         let mut conv = self.get_conversation(chat_id).await;
                         conv.model_id = None;
@@ -441,7 +305,7 @@ impl App {
                         .send_message(chat_id, "Model cleared; using default.")
                         .await?;
                 }
-                CommandArg::Text(model_id) => {
+                commands::CommandArg::Text(model_id) => {
                     let available_models = self.models.read().await;
                     let selected_model = available_models.iter().find(|m| m.id == model_id);
 
@@ -467,8 +331,8 @@ impl App {
                     }
                 }
             },
-            Command::Key(arg) => match arg {
-                CommandArg::Empty => {
+            commands::Command::Key(arg) => match arg {
+                commands::CommandArg::Empty => {
                     let current_key = {
                         let conv = self.get_conversation(chat_id).await;
                         conv.openrouter_api_key.clone()
@@ -484,7 +348,7 @@ impl App {
                         }
                     }
                 }
-                CommandArg::None => {
+                commands::CommandArg::None => {
                     {
                         let mut conv = self.get_conversation(chat_id).await;
                         conv.openrouter_api_key = None;
@@ -492,7 +356,7 @@ impl App {
                     db::set_openrouter_api_key(&self.db, chat_id, None).await;
                     self.bot.send_message(chat_id, "API key cleared.").await?;
                 }
-                CommandArg::Text(key) => {
+                commands::CommandArg::Text(key) => {
                     {
                         let mut conv = self.get_conversation(chat_id).await;
                         conv.openrouter_api_key = Some(key.clone());
@@ -501,8 +365,8 @@ impl App {
                     self.bot.send_message(chat_id, "API key updated.").await?;
                 }
             },
-            Command::SystemPrompt(arg) => match arg {
-                CommandArg::Empty => {
+            commands::Command::SystemPrompt(arg) => match arg {
+                commands::CommandArg::Empty => {
                     let current_prompt = {
                         let conv = self.get_conversation(chat_id).await;
                         conv.system_prompt.as_ref().map(|p| p.text.clone())
@@ -523,7 +387,7 @@ impl App {
                         }
                     }
                 }
-                CommandArg::None => {
+                commands::CommandArg::None => {
                     {
                         let mut conv = self.get_conversation(chat_id).await;
                         conv.system_prompt = None;
@@ -533,7 +397,7 @@ impl App {
                         .send_message(chat_id, "System prompt cleared.")
                         .await?;
                 }
-                CommandArg::Text(prompt) => {
+                commands::CommandArg::Text(prompt) => {
                     {
                         let mut conv = self.get_conversation(chat_id).await;
                         conv.system_prompt = Some(conversation::Message {
@@ -547,7 +411,7 @@ impl App {
                         .await?;
                 }
             },
-            Command::Approve(approve) => {
+            commands::Command::Approve(approve) => {
                 let is_admin = { self.get_conversation(chat_id).await.is_admin };
                 if !is_admin {
                     self.bot
@@ -557,7 +421,7 @@ impl App {
                 }
 
                 match approve {
-                    ApproveArg::Empty => {
+                    commands::ApproveArg::Empty => {
                         let pending = db::list_unauthorized_chats(&self.db).await;
                         if pending.is_empty() {
                             self.bot.send_message(chat_id, "No pending users.").await?;
@@ -571,9 +435,9 @@ impl App {
                         }
 
                         let message = format!("Pending users:\n{}", lines.join("\n"));
-                        self.bot_split_send(chat_id, &message, None).await?;
+                        telegram::bot_split_send(&self.bot, chat_id, &message, None).await?;
                     }
-                    ApproveArg::ApproveChat {
+                    commands::ApproveArg::ApproveChat {
                         chat_id: target_chat_id,
                         is_authorized,
                     } => {
@@ -591,7 +455,7 @@ impl App {
                         );
                         self.bot.send_message(chat_id, message).await?;
                     }
-                    ApproveArg::Invalid => {
+                    commands::ApproveArg::Invalid => {
                         self.bot
                             .send_message(chat_id, "Usage: /approve <chat_id> <true|false>")
                             .await?;
@@ -713,141 +577,6 @@ impl App {
             map.get_mut(&chat_id)
                 .expect("conversation entry just inserted or already existed")
         })
-    }
-}
-
-#[derive(Debug)]
-enum CommandArg {
-    Empty,
-    None,
-    Text(String),
-}
-
-impl CommandArg {
-    fn from_text(text: Option<&str>) -> Self {
-        match text {
-            Some(text) => {
-                let trimmed = text.trim();
-                if trimmed.is_empty() {
-                    CommandArg::Empty
-                } else if trimmed.eq_ignore_ascii_case("none") {
-                    CommandArg::None
-                } else {
-                    CommandArg::Text(trimmed.to_string())
-                }
-            }
-            None => CommandArg::Empty,
-        }
-    }
-}
-
-#[derive(Debug)]
-enum Command {
-    /// Show this help text.
-    Help,
-    /// Show this help text.
-    Start,
-    /// List available models.
-    Models,
-    /// Get/set the model (use `none` to clear).
-    Model(CommandArg),
-    /// Get/set the API key (use `none` to clear).
-    Key(CommandArg),
-    /// Get/set the system prompt (use `none` to clear).
-    SystemPrompt(CommandArg),
-    /// List or update chat authorization.
-    Approve(ApproveArg),
-}
-
-#[derive(Debug)]
-enum ApproveArg {
-    Empty,
-    Invalid,
-    ApproveChat { chat_id: u64, is_authorized: bool },
-}
-
-fn parse_command(text: &str, bot_username: &str) -> Result<Option<Command>, String> {
-    let trimmed = text.trim();
-    if !trimmed.starts_with('/') {
-        return Err("Unknown command".to_string());
-    }
-
-    let without_slash = trimmed.trim_start_matches('/');
-    let (cmd_part, args_part) = match without_slash.find(char::is_whitespace) {
-        Some(idx) => (
-            &without_slash[..idx],
-            Some(without_slash[idx..].trim_start()),
-        ),
-        None => (without_slash, None),
-    };
-    let args_part = args_part.and_then(|args| if args.is_empty() { None } else { Some(args) });
-
-    let (cmd_name, mention) = match cmd_part.split_once('@') {
-        Some((cmd, mention)) => (cmd, Some(mention)),
-        None => (cmd_part, None),
-    };
-
-    if let Some(mention) = mention
-        && !mention.eq_ignore_ascii_case(bot_username)
-    {
-        return Ok(None);
-    }
-
-    match cmd_name.to_ascii_lowercase().as_str() {
-        "help" => {
-            if args_part.is_none() {
-                Ok(Some(Command::Help))
-            } else {
-                Err("Unknown command".to_string())
-            }
-        }
-        "start" => {
-            if args_part.is_none() {
-                Ok(Some(Command::Start))
-            } else {
-                Err("Unknown command".to_string())
-            }
-        }
-        "models" => {
-            if args_part.is_none() {
-                Ok(Some(Command::Models))
-            } else {
-                Err("Unknown command".to_string())
-            }
-        }
-        "model" => Ok(Some(Command::Model(CommandArg::from_text(args_part)))),
-        "key" => Ok(Some(Command::Key(CommandArg::from_text(args_part)))),
-        "systemprompt" => Ok(Some(Command::SystemPrompt(CommandArg::from_text(
-            args_part,
-        )))),
-        "approve" => {
-            if args_part.is_none() {
-                return Ok(Some(Command::Approve(ApproveArg::Empty)));
-            }
-            let args = args_part.unwrap().split_whitespace().collect::<Vec<&str>>();
-            if args.len() != 2 {
-                return Ok(Some(Command::Approve(ApproveArg::Invalid)));
-            }
-
-            let chat_id: u64 = match args[0].parse() {
-                Ok(value) => value,
-                Err(_) => {
-                    return Ok(Some(Command::Approve(ApproveArg::Invalid)));
-                }
-            };
-            let is_authorized = match args[1].to_ascii_lowercase().as_str() {
-                "true" | "1" => true,
-                "false" | "0" => false,
-                _ => {
-                    return Ok(Some(Command::Approve(ApproveArg::Invalid)));
-                }
-            };
-            Ok(Some(Command::Approve(ApproveArg::ApproveChat {
-                chat_id,
-                is_authorized,
-            })))
-        }
-        _ => Err("Unknown command".to_string()),
     }
 }
 
