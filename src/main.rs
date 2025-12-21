@@ -25,6 +25,17 @@ use typing::TypingIndicator;
 
 const DEFAULT_MODEL_FALLBACK: &str = "xiaomi/mimo-v2-flash:free";
 
+/// Return a minimally identifying, masked version of an API key.
+fn mask_api_key(key: &str) -> String {
+    let prefix_len = key.len().min(3);
+    let suffix_len = key.len().saturating_sub(prefix_len).min(4);
+    let prefix = &key[..prefix_len];
+    let suffix = &key[key.len().saturating_sub(suffix_len)..];
+    let masked_len = key.len().saturating_sub(prefix_len + suffix_len).max(6);
+
+    format!("{prefix}{}{}", "*".repeat(masked_len), suffix)
+}
+
 #[derive(Debug, Clone)]
 struct App {
     bot: Bot,
@@ -123,6 +134,7 @@ impl App {
 
         let user_message = self.extract_user_message(chat_id, &msg).await?;
 
+        let is_authorized = self.get_conversation(chat_id).await.is_authorized;
         let is_group = msg.chat.is_group() || msg.chat.is_supergroup();
         if is_group
             && !self
@@ -132,7 +144,7 @@ impl App {
             return Ok(());
         }
 
-        if !self.get_conversation(chat_id).await.is_authorized {
+        if !is_authorized {
             let message = format!(
                 "You are not authorized to use this bot. Chat id {}",
                 chat_id
@@ -443,12 +455,13 @@ impl App {
                     };
                     match current_key {
                         Some(key) => {
+                            let masked_key = mask_api_key(&key);
                             self.bot
                                 .send_message(
                                     chat_id,
                                     format!(
-                                        "Current API key\\: `{}`",
-                                        telegram::escape_markdown_v2(&key)
+                                        "API key is set (masked)\\: `{}`",
+                                        telegram::escape_markdown_v2(&masked_key)
                                     ),
                                 )
                                 .parse_mode(ParseMode::MarkdownV2)
