@@ -151,21 +151,22 @@ async fn spawn_model_refresh(
 impl App {
     async fn process_message(&self, msg: Message) -> anyhow::Result<()> {
         let chat_id = msg.chat.id;
-        let user_message = self.extract_user_message(chat_id, &msg).await?;
-
         log::info!("received message from chat {}", chat_id);
+
+        if !self.get_conversation(chat_id).await.is_authorized {
+            let message = format!(
+                "You are not authorized to use this bot. Chat id {}",
+                chat_id
+            );
+            self.bot.send_message(chat_id, &message).await?;
+            return Err(anyhow::anyhow!("Unauthorized"));
+        }
+
+        let user_message = self.extract_user_message(chat_id, &msg).await?;
 
         let (payload, openai_api_key) = match self.prepare_llm_request(chat_id, &user_message).await
         {
             Ok(ready) => (ready.payload, ready.openrouter_api_key),
-            Err(LlmRequestError::Unauthorized) => {
-                let message = format!(
-                    "You are not authorized to use this bot. Chat id {}",
-                    chat_id
-                );
-                self.bot.send_message(chat_id, &message).await?;
-                return Err(anyhow::anyhow!("Unauthorized"));
-            }
             Err(LlmRequestError::NoApiKeyProvided) => {
                 let message = format!("No API key provided for chat id {}", chat_id);
                 self.bot.send_message(chat_id, &message).await?;
@@ -246,11 +247,6 @@ impl App {
         user_message: &conversation::Message,
     ) -> LlmRequestResult {
         let mut conversation = self.get_conversation(chat_id).await;
-        if !conversation.is_authorized {
-            log::warn!("Unauthorized user {}", chat_id);
-            return Err(LlmRequestError::Unauthorized);
-        }
-
         let model = self.resolve_model(conversation.model_id.as_deref()).await;
 
         let reserved_tokens = openrouter_api::estimate_tokens([
@@ -341,7 +337,6 @@ struct LlmRequestReady {
 
 #[derive(Debug)]
 enum LlmRequestError {
-    Unauthorized,
     NoApiKeyProvided,
 }
 
