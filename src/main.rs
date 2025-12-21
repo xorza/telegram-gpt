@@ -178,17 +178,10 @@ impl App {
             }
         };
 
-        let typing_indicator = TypingIndicator::new(self.bot.clone(), chat_id);
-
-
-        let llm_response = openrouter_api::send(
-            &self.http_client,
-            &openai_api_key,
-            payload
-        )
-        .await;
-
-        drop(typing_indicator);
+        let llm_response = {
+            let _typing_indicator = TypingIndicator::new(self.bot.clone(), chat_id);
+            openrouter_api::send(&self.http_client, &openai_api_key, payload).await
+        };
 
         match llm_response {
             Ok(llm_response) => {
