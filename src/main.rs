@@ -20,6 +20,7 @@ use teloxide::{
     types::{ChatId, MessageId, MessageKind, ParseMode, ReactionType},
 };
 use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard, RwLock};
+use tokio::time;
 use typing::TypingIndicator;
 
 const DEFAULT_MODEL_FALLBACK: &str = "xiaomi/mimo-v2-flash:free";
@@ -77,13 +78,7 @@ async fn init() -> App {
 
     let bot = Bot::from_env();
     let http_client = reqwest::Client::new();
-    let bot_username = bot
-        .get_me()
-        .await
-        .expect("failed to fetch bot user info")
-        .user
-        .username
-        .unwrap_or_default();
+    let bot_username = fetch_bot_username(&bot).await;
     let models = models::spawn_model_refresh(http_client.clone()).await;
     let db = db::init_db().await;
     let conversations: Arc<Mutex<HashMap<ChatId, Conversation>>> =
@@ -838,4 +833,18 @@ fn is_common_text_message(msg: &Message) -> bool {
 
 fn is_command(message_text: &str) -> bool {
     message_text.starts_with('/')
+}
+
+async fn fetch_bot_username(bot: &Bot) -> String {
+    loop {
+        match bot.get_me().await {
+            Ok(me) => {
+                return me.user.username.unwrap_or_default();
+            }
+            Err(err) => {
+                log::warn!("failed to fetch bot user info: {err}; retrying in 5s");
+                time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+        }
+    }
 }
