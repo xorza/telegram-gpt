@@ -184,22 +184,26 @@ impl App {
     }
 
     async fn maybe_update_user_name(&self, msg: &Message) {
-        let Some(user) = msg.from.as_ref() else {
-            return;
-        };
+        let user_name = if msg.chat.is_group() || msg.chat.is_supergroup() {
+            msg.chat.title().map(str::to_owned)
+        } else {
+            let Some(user) = msg.from.as_ref() else {
+                return;
+            };
 
-        let user_name = user.username.clone().or_else(|| {
-            let mut name = user.first_name.clone();
-            if let Some(last) = user.last_name.as_ref()
-                && !last.is_empty()
-            {
-                if !name.is_empty() {
-                    name.push(' ');
+            user.username.clone().or_else(|| {
+                let mut name = user.first_name.clone();
+                if let Some(last) = user.last_name.as_ref()
+                    && !last.is_empty()
+                {
+                    if !name.is_empty() {
+                        name.push(' ');
+                    }
+                    name.push_str(last);
                 }
-                name.push_str(last);
-            }
-            if name.is_empty() { None } else { Some(name) }
-        });
+                if name.is_empty() { None } else { Some(name) }
+            })
+        };
 
         let Some(user_name) = user_name else {
             return;
