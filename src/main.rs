@@ -210,7 +210,29 @@ impl App {
     }
 
     async fn bot_split_send(&self, chat_id: ChatId, text: &str) -> anyhow::Result<()> {
-        unimplemented!();
+        if text.chars().count() <= TELEGRAM_MAX_MESSAGE_LENGTH {
+            self.bot.send_message(chat_id, text).await?;
+            return Ok(());
+        }
+
+        let mut buffer = String::new();
+        let mut buffer_len = 0usize;
+
+        for token in text.split_inclusive(|c| c == ' ' || c == '\n') {
+            let token_len = token.chars().count();
+            if buffer_len + token_len > TELEGRAM_MAX_MESSAGE_LENGTH && !buffer.is_empty() {
+                self.bot.send_message(chat_id, &buffer).await?;
+                buffer.clear();
+                buffer_len = 0;
+            }
+
+            buffer.push_str(token);
+            buffer_len += token_len;
+        }
+
+        if !buffer.is_empty() {
+            self.bot.send_message(chat_id, &buffer).await?;
+        }
 
         Ok(())
     }
@@ -241,9 +263,8 @@ impl App {
                     .collect::<Vec<_>>()
                     .join("\n");
 
-                self.bot
-                    .send_message(chat_id, format!("Available models:\n{}", models))
-                    .await?;
+                let message = format!("Available models:\n{}", models);
+                self.bot_split_send(chat_id, &message).await?;
             }
             _ => {
                 self.bot.send_message(chat_id, "Unknown command").await?;
