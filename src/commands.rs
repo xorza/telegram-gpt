@@ -25,6 +25,8 @@ impl CommandArg {
 
 #[derive(Debug)]
 pub enum Command {
+    /// Ignore the current message.
+    Ignore,
     /// Show this help text.
     Help,
     /// Show this help text.
@@ -48,7 +50,7 @@ pub enum ApproveArg {
     ApproveChat { chat_id: u64, is_authorized: bool },
 }
 
-pub fn parse_command(text: &str, bot_username: &str) -> Result<Option<Command>, String> {
+pub fn parse_command(text: &str, bot_username: &str) -> Result<Command, String> {
     let trimmed = text.trim();
     if !trimmed.starts_with('/') {
         return Err("Unknown command".to_string());
@@ -72,62 +74,60 @@ pub fn parse_command(text: &str, bot_username: &str) -> Result<Option<Command>, 
     if let Some(mention) = mention
         && !mention.eq_ignore_ascii_case(bot_username)
     {
-        return Ok(None);
+        return Ok(Command::Ignore);
     }
 
     match cmd_name.to_ascii_lowercase().as_str() {
         "help" => {
             if args_part.is_none() {
-                Ok(Some(Command::Help))
+                Ok(Command::Help)
             } else {
                 Err("Unknown command".to_string())
             }
         }
         "start" => {
             if args_part.is_none() {
-                Ok(Some(Command::Start))
+                Ok(Command::Start)
             } else {
                 Err("Unknown command".to_string())
             }
         }
         "models" => {
             if args_part.is_none() {
-                Ok(Some(Command::Models))
+                Ok(Command::Models)
             } else {
                 Err("Unknown command".to_string())
             }
         }
-        "model" => Ok(Some(Command::Model(CommandArg::from_text(args_part)))),
-        "key" => Ok(Some(Command::Key(CommandArg::from_text(args_part)))),
-        "systemprompt" => Ok(Some(Command::SystemPrompt(CommandArg::from_text(
-            args_part,
-        )))),
+        "model" => Ok(Command::Model(CommandArg::from_text(args_part))),
+        "key" => Ok(Command::Key(CommandArg::from_text(args_part))),
+        "systemprompt" => Ok(Command::SystemPrompt(CommandArg::from_text(args_part))),
         "approve" => {
             if args_part.is_none() {
-                return Ok(Some(Command::Approve(ApproveArg::Empty)));
+                return Ok(Command::Approve(ApproveArg::Empty));
             }
             let args = args_part.unwrap().split_whitespace().collect::<Vec<&str>>();
             if args.len() != 2 {
-                return Ok(Some(Command::Approve(ApproveArg::Invalid)));
+                return Ok(Command::Approve(ApproveArg::Invalid));
             }
 
             let chat_id: u64 = match args[0].parse() {
                 Ok(value) => value,
                 Err(_) => {
-                    return Ok(Some(Command::Approve(ApproveArg::Invalid)));
+                    return Ok(Command::Approve(ApproveArg::Invalid));
                 }
             };
             let is_authorized = match args[1].to_ascii_lowercase().as_str() {
                 "true" | "1" => true,
                 "false" | "0" => false,
                 _ => {
-                    return Ok(Some(Command::Approve(ApproveArg::Invalid)));
+                    return Ok(Command::Approve(ApproveArg::Invalid));
                 }
             };
-            Ok(Some(Command::Approve(ApproveArg::ApproveChat {
+            Ok(Command::Approve(ApproveArg::ApproveChat {
                 chat_id,
                 is_authorized,
-            })))
+            }))
         }
         _ => Err("Unknown command".to_string()),
     }

@@ -234,11 +234,11 @@ impl App {
     ) -> anyhow::Result<()> {
         let command = match commands::parse_command(user_message.text.as_str(), &self.bot_username)
         {
-            Ok(Some(command)) => command,
-            Ok(None) => {
+            Ok(commands::Command::Ignore) => {
                 // Command addressed to a different bot; ignore silently.
                 return Ok(());
             }
+            Ok(command) => command,
             Err(message) => {
                 log::warn!("Failed to parse command: {}", message);
                 self.bot.send_message(chat_id, message).await?;
@@ -248,6 +248,9 @@ impl App {
 
         log::info!("Received command: {:?}", command);
         match command {
+            commands::Command::Ignore => {
+                // Command addressed to a different bot; ignore silently.
+            }
             commands::Command::Help | commands::Command::Start => {
                 let message = [
                     "Commands:",
