@@ -25,7 +25,7 @@ use teloxide::{
 use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard, RwLock};
 use typing::TypingIndicator;
 
-const DEFAULT_MODEL: &str = "xiaomi/mimo-v2-flash:free";
+const DEFAULT_MODEL_FALLBACK: &str = "xiaomi/mimo-v2-flash:free";
 const TELEGRAM_MAX_MESSAGE_LENGTH: usize = 4096;
 const STREAM_RESPONSE: bool = false;
 
@@ -37,6 +37,7 @@ struct App {
     conversations: Arc<Mutex<HashMap<ChatId, Conversation>>>,
     db: Arc<Mutex<Connection>>,
     system_prompt0: conversation::Message,
+    default_model: String,
 }
 
 #[tokio::main]
@@ -88,6 +89,8 @@ async fn init() -> App {
         role: conversation::MessageRole::System,
         text: system_text0,
     };
+    let default_model =
+        std::env::var("DEFAULT_MODEL").unwrap_or_else(|_| DEFAULT_MODEL_FALLBACK.to_string());
 
     log::info!("starting tggpt bot");
 
@@ -98,6 +101,7 @@ async fn init() -> App {
         conversations,
         db,
         system_prompt0,
+        default_model,
     }
 }
 
@@ -465,13 +469,18 @@ impl App {
     }
 
     async fn resolve_model(&self, model_id: Option<&str>) -> openrouter_api::ModelSummary {
-        let requested = model_id.unwrap_or(DEFAULT_MODEL);
+        let requested = model_id.unwrap_or(self.default_model.as_str());
         let models = self.models.read().await;
         models
             .iter()
             .find(|m| m.id == requested)
             .cloned()
-            .or_else(|| models.iter().find(|m| m.id == DEFAULT_MODEL).cloned())
+            .or_else(|| {
+                models
+                    .iter()
+                    .find(|m| m.id == self.default_model.as_str())
+                    .cloned()
+            })
             .expect("default model not found")
     }
 
