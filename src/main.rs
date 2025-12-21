@@ -471,7 +471,7 @@ impl App {
         chat_id: ChatId,
         msg: &Message,
     ) -> anyhow::Result<conversation::Message> {
-        let user_text = match msg.text() {
+        let mut user_text = match msg.text() {
             Some(t) => t.trim().to_owned(),
             None => {
                 self.bot
@@ -480,6 +480,22 @@ impl App {
                 return Err(anyhow::anyhow!("Only text messages are supported."));
             }
         };
+
+        if !user_text.starts_with('/') {
+            if let Some(reply_text) = msg
+                .reply_to_message()
+                .and_then(|reply| reply.text())
+                .map(|text| text.trim())
+                .filter(|text| !text.is_empty())
+            {
+                let quoted = reply_text
+                    .lines()
+                    .map(|line| format!("> {}", line))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                user_text = format!("{}\n\n{}", quoted, user_text);
+            }
+        }
 
         Ok(conversation::Message {
             role: MessageRole::User,
