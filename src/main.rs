@@ -87,15 +87,18 @@ async fn init() -> App {
     let db = db::init_db().await;
     let conversations: Arc<Mutex<HashMap<ChatId, Conversation>>> =
         Arc::new(Mutex::new(HashMap::new()));
-    let system_text0 = "You are a Telegram bot. In group chats you may see many messages, but only treat the latest message that explicitly mentions @<bot_name> (or replies to you) as the user's prompt; ignore the rest. Respond in plain text only (no Markdown).".to_string();
     let system_prompt0 = conversation::Message {
         role: conversation::MessageRole::System,
-        text: system_text0,
+        text: "You are a Telegram bot. In group chats you may see many messages, but only treat the latest message that explicitly mentions @<bot_name> (or replies to you) as the user's prompt; ignore the rest. Respond in plain text only (no Markdown).".to_string(),
     };
     let default_model =
         std::env::var("DEFAULT_MODEL").unwrap_or_else(|_| DEFAULT_MODEL_FALLBACK.to_string());
 
-    log::info!("starting tggpt bot");
+    log::info!(
+        "starting tggpt bot as @{}, default model {}",
+        bot_username,
+        default_model
+    );
 
     App {
         bot,
@@ -115,12 +118,12 @@ impl App {
             return Ok(());
         }
 
-        self.maybe_update_user_name(&msg).await;
-
         let chat_id = msg.chat.id;
-
         let is_public = msg.chat.is_group() || msg.chat.is_supergroup() || msg.chat.is_channel();
+
         log::info!("received message from chat {}", chat_id);
+
+        self.maybe_update_user_name(&msg).await;
 
         if is_public && !self.should_process_group_message(&msg).await {
             let user_message = self.extract_user_message(&msg).await?;
@@ -176,6 +179,7 @@ impl App {
             chat_id
         );
         self.bot.send_message(chat_id, &message).await?;
+
         Err(anyhow::anyhow!("Unauthorized"))
     }
 
