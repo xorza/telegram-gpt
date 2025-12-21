@@ -111,10 +111,7 @@ async fn init() -> App {
 
 impl App {
     async fn process_message(&self, msg: Message) -> anyhow::Result<()> {
-        if !matches!(msg.kind, MessageKind::Common(..)) {
-            return Ok(());
-        }
-        if msg.text().is_none() {
+        if !is_common_text_message(&msg) {
             return Ok(());
         }
 
@@ -124,40 +121,31 @@ impl App {
         let is_group = msg.chat.is_group() || msg.chat.is_supergroup();
         log::info!("received message from chat {}", chat_id);
 
-        if is_group && !self.should_process_group_message(&msg).await {
-            let user_message = self.extract_user_message(&msg).await?;
-            self.persist_messages(chat_id, std::slice::from_ref(&user_message))
-                .await;
-            log::info!("ignored group message without mention for chat {}", chat_id);
+        if self
+            .skip_group_message_if_unaddressed(chat_id, &msg)
+            .await?
+        {
             return Ok(());
         }
 
-        // Never respond to other bots to avoid bot-bot loops.
-        if msg.from.as_ref().map(|u| u.is_bot).unwrap_or(false) {
+        if is_from_bot(&msg) {
             log::info!("ignoring message from bot account in chat {}", msg.chat.id);
             return Ok(());
         }
 
-        if !self.get_conversation(chat_id).await.is_authorized {
-            let message = format!(
-                "You are not authorized to use this bot. Chat id {}",
-                chat_id
-            );
-            self.bot.send_message(chat_id, &message).await?;
-            return Err(anyhow::anyhow!("Unauthorized"));
-        }
+        self.ensure_authorized(chat_id).await?;
 
         let message_text = msg.text().unwrap().trim();
-        if message_text.starts_with("/") {
+        if is_command(message_text) {
             if is_group {
                 self.bot
                     .send_message(chat_id, "Commands not allowed in chats")
                     .await?;
                 return Ok(());
-            } else {
-                self.process_command(chat_id, message_text).await?;
-                return Ok(());
             }
+
+            self.process_command(chat_id, message_text).await?;
+            return Ok(());
         }
 
         let user_message = self.extract_user_message(&msg).await?;
@@ -177,9 +165,37 @@ impl App {
         };
 
         self.handle_llm_response(chat_id, msg.id, is_group, user_message, llm_response)
-            .await?;
+            .await
+    }
 
-        Ok(())
+    async fn skip_group_message_if_unaddressed(
+        &self,
+        chat_id: ChatId,
+        msg: &Message,
+    ) -> anyhow::Result<bool> {
+        let is_group = msg.chat.is_group() || msg.chat.is_supergroup();
+        if is_group && !self.should_process_group_message(msg).await {
+            let user_message = self.extract_user_message(msg).await?;
+            self.persist_messages(chat_id, std::slice::from_ref(&user_message))
+                .await;
+            log::info!("ignored group message without mention for chat {}", chat_id);
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
+    async fn ensure_authorized(&self, chat_id: ChatId) -> anyhow::Result<()> {
+        if self.get_conversation(chat_id).await.is_authorized {
+            return Ok(());
+        }
+
+        let message = format!(
+            "You are not authorized to use this bot. Chat id {}",
+            chat_id
+        );
+        self.bot.send_message(chat_id, &message).await?;
+        Err(anyhow::anyhow!("Unauthorized"))
     }
 
     /// In group chats, only process messages that mention or reply to the bot; otherwise, just record them.
@@ -772,4 +788,16 @@ fn mask_api_key(key: &str) -> String {
     let suffix = &key[key.len().saturating_sub(suffix_len)..];
 
     format!("{prefix}...{suffix}")
+}
+
+fn is_from_bot(msg: &Message) -> bool {
+    msg.from.as_ref().map(|u| u.is_bot).unwrap_or(false)
+}
+
+fn is_common_text_message(msg: &Message) -> bool {
+    matches!(msg.kind, MessageKind::Common(..)) && msg.text().is_some()
+}
+
+fn is_command(message_text: &str) -> bool {
+    message_text.starts_with('/')
 }
