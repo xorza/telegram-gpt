@@ -28,7 +28,6 @@ use typing::TypingIndicator;
 
 const DEFAULT_MODEL_FALLBACK: &str = "xiaomi/mimo-v2-flash:free";
 const TELEGRAM_MAX_MESSAGE_LENGTH: usize = 4096;
-const STREAM_RESPONSE: bool = false;
 
 #[derive(Debug, Clone)]
 struct App {
@@ -527,7 +526,7 @@ impl App {
         };
         drop(conversation);
 
-        let payload = openrouter_api::prepare_payload(&model.id, history.iter(), STREAM_RESPONSE);
+        let payload = openrouter_api::prepare_payload(&model.id, history.iter(), false);
 
         Ok(LlmRequestReady {
             payload,
