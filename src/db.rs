@@ -282,7 +282,11 @@ pub async fn set_user_name(db: &Arc<Mutex<Connection>>, chat_id: ChatId, user_na
     }
 }
 
-pub async fn set_is_authorized(db: &Arc<Mutex<Connection>>, chat_id: ChatId, is_authorized: bool) {
+pub async fn set_is_authorized(
+    db: &Arc<Mutex<Connection>>,
+    chat_id: ChatId,
+    is_authorized: bool,
+) -> anyhow::Result<()> {
     let conn = db.lock().await;
     let updated = conn
         .execute(
@@ -291,11 +295,13 @@ pub async fn set_is_authorized(db: &Arc<Mutex<Connection>>, chat_id: ChatId, is_
         )
         .expect("failed to update is_authorized");
 
-    if updated != 1 {
-        fatal_panic(format!(
-            "failed to update is_authorized for chat_id {} (updated {})",
-            chat_id.0, updated
-        ));
+    if updated == 1 {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "failed to update is_authorized for chat_id {}",
+            chat_id.0
+        ))
     }
 }
 

@@ -458,18 +458,26 @@ impl App {
                         is_authorized,
                     } => {
                         let target_id = ChatId(target_chat_id as i64);
-                        db::set_is_authorized(&self.db, target_id, is_authorized).await;
+                        let result =
+                            db::set_is_authorized(&self.db, target_id, is_authorized).await;
+                        if result.is_err() {
+                            self.bot
+                                .send_message(chat_id, "Failed to authorize chat")
+                                .await?;
+                        } else {
+                            {
+                                let mut conv_map = self.conversations.lock().await;
+                                if let Some(conv) = conv_map.get_mut(&target_id) {
+                                    conv.is_authorized = is_authorized;
+                                }
+                            }
 
-                        let mut conv_map = self.conversations.lock().await;
-                        if let Some(conv) = conv_map.get_mut(&target_id) {
-                            conv.is_authorized = is_authorized;
+                            let message = format!(
+                                "Updated chat {} is_authorized={}",
+                                target_chat_id, is_authorized
+                            );
+                            self.bot.send_message(chat_id, message).await?;
                         }
-
-                        let message = format!(
-                            "Updated chat {} is_authorized={}",
-                            target_chat_id, is_authorized
-                        );
-                        self.bot.send_message(chat_id, message).await?;
                     }
                     commands::ApproveArg::Invalid => {
                         self.bot
