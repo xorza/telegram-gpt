@@ -6,6 +6,11 @@ use teloxide::{
 
 const TELEGRAM_MAX_MESSAGE_LENGTH: usize = 4096;
 
+/// Escape a string so it is safe to send with `ParseMode::MarkdownV2`.
+pub fn escape_markdown_v2(text: &str) -> String {
+    teloxide::utils::markdown::escape(text)
+}
+
 pub async fn send_message_checked(
     bot: &Bot,
     chat_id: ChatId,

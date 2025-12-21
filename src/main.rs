@@ -15,6 +15,7 @@ use conversation::{Conversation, MessageRole};
 use flexi_logger::{Cleanup, Criterion, Duplicate, FileSpec, Logger, Naming};
 use rusqlite::Connection;
 use std::{collections::HashMap, sync::Arc};
+use telegram::escape_markdown_v2;
 use teloxide::{
     prelude::*,
     types::{ChatId, MessageId, ReactionType},
@@ -447,11 +448,15 @@ impl App {
                         let mut lines = Vec::with_capacity(pending.len());
                         for (pending_id, name) in pending {
                             let display_name = name.unwrap_or_else(|| "unknown".to_string());
-                            lines.push(format!("{} - {}", pending_id, display_name));
+                            let display_name = escape_markdown_v2(&display_name);
+                            lines.push(format!("`{}` \\- {}", pending_id, display_name));
                         }
 
                         let message = format!("Pending users:\n{}", lines.join("\n"));
-                        telegram::bot_split_send(&self.bot, chat_id, &message, None).await?;
+                        self.bot
+                            .send_message(chat_id, &message)
+                            .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+                            .await?;
                     }
                     commands::ApproveArg::ApproveChat {
                         chat_id: target_chat_id,
