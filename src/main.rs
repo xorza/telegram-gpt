@@ -243,6 +243,7 @@ impl App {
         user_message: &conversation::Message,
     ) -> anyhow::Result<()> {
         let command = user_message.text.split_whitespace().next().unwrap();
+        log::info!("Received command: {}", command);
         match command {
             "/models" => {
                 let models = self.models.read().await;
@@ -265,6 +266,35 @@ impl App {
 
                 let message = format!("Available models:\n{}", models);
                 self.bot_split_send(chat_id, &message).await?;
+            }
+            "/model" => {
+                let model_id = user_message
+                    .text
+                    .trim_start_matches("/model ")
+                    .trim()
+                    .to_string();
+                let available_models = self.models.read().await;
+                let selected_model = available_models.iter().find(|m| m.id == model_id);
+
+                if let Some(model) = selected_model {
+                    {
+                        let mut conv = self.get_conversation(chat_id).await;
+                        conv.model_id = Some(model.id.clone());
+                    }
+                    log::info!("User {} selected model: `{}`", chat_id, model.name);
+                    self.bot
+                        .send_message(chat_id, format!("Selected model: `{}`", model.name))
+                        .await?;
+                } else {
+                    log::warn!(
+                        "User {} tried to select non-existent model: `{}`",
+                        chat_id,
+                        model_id
+                    );
+                    self.bot
+                        .send_message(chat_id, format!("Model not found: `{}`", model_id))
+                        .await?;
+                }
             }
             _ => {
                 self.bot.send_message(chat_id, "Unknown command").await?;
