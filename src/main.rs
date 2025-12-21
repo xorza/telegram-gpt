@@ -185,6 +185,8 @@ impl App {
 
         match llm_response {
             Ok(llm_response) => {
+                self.bot_split_send(chat_id, &llm_response.completion_text)
+                    .await?;
                 let assistant_message = conversation::Message {
                     role: MessageRole::Assistant,
                     text: llm_response.completion_text,
@@ -203,6 +205,12 @@ impl App {
                     .await?;
             }
         }
+
+        Ok(())
+    }
+
+    async fn bot_split_send(&self, chat_id: ChatId, text: &str) -> anyhow::Result<()> {
+        unimplemented!();
 
         Ok(())
     }
@@ -365,58 +373,3 @@ enum LlmRequestError {
 }
 
 type LlmRequestResult = Result<LlmRequestReady, LlmRequestError>;
-
-async fn handle_stream_delta(
-    bot: Bot,
-    chat_id: ChatId,
-    stream_buffer: Arc<tokio::sync::Mutex<String>>,
-    delta: String,
-    finalize: bool,
-) -> anyhow::Result<()> {
-    // Accumulate incoming delta into the shared buffer.
-    let mut buf = stream_buffer.lock().await;
-    buf.push_str(&delta);
-
-    // Remove and return up to `max_chars` characters, preferring to split on whitespace.
-    fn take_prefix(buf: &mut String, max_chars: usize) -> String {
-        let mut last_whitespace = None;
-        let mut byte_split = buf.len();
-        for (char_idx, (i, ch)) in buf.char_indices().enumerate() {
-            if char_idx == max_chars {
-                byte_split = i;
-                break;
-            }
-            if ch.is_whitespace() {
-                last_whitespace = Some(i);
-            }
-        }
-
-        // Buffer shorter than max_chars — take it all.
-        if byte_split == buf.len() {
-            return std::mem::take(buf);
-        }
-
-        // Prefer splitting on the last whitespace before the limit (unless it would be empty).
-        let split_at = last_whitespace.filter(|idx| *idx > 0).unwrap_or(byte_split);
-        let tail = buf.split_off(split_at);
-        std::mem::replace(buf, tail)
-    }
-
-    // Send full Telegram-sized chunks as soon as they accumulate.
-    while buf.chars().count() >= TELEGRAM_MAX_MESSAGE_LENGTH {
-        let chunk = take_prefix(&mut buf, TELEGRAM_MAX_MESSAGE_LENGTH);
-        let to_send = chunk.clone();
-        drop(buf);
-        bot.send_message(chat_id, to_send).await?;
-        buf = stream_buffer.lock().await;
-    }
-
-    // On final signal, flush any remainder.
-    if finalize && !buf.is_empty() {
-        let to_send = std::mem::take(&mut *buf);
-        drop(buf);
-        bot.send_message(chat_id, to_send).await?;
-    }
-
-    Ok(())
-}
