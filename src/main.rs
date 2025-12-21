@@ -287,6 +287,7 @@ impl App {
                             let mut conv = self.get_conversation(chat_id).await;
                             conv.model_id = Some(model.id.clone());
                         }
+                        db::set_model_id(&self.db, chat_id, Some(&model.id)).await;
                         log::info!("User {} selected model: `{}`", chat_id, model.name);
                         self.bot
                             .send_message(chat_id, format!("Selected model: `{}`", model.name))
@@ -325,6 +326,7 @@ impl App {
                         let mut conv = self.get_conversation(chat_id).await;
                         conv.openrouter_api_key = Some(key.to_string());
                     }
+                    db::set_openrouter_api_key(&self.db, chat_id, Some(key)).await;
                     self.bot.send_message(chat_id, "API key updated.").await?;
                 }
             }
@@ -361,6 +363,7 @@ impl App {
                             text: prompt.to_string(),
                         });
                     }
+                    db::set_system_prompt(&self.db, chat_id, Some(prompt)).await;
                     self.bot
                         .send_message(chat_id, "System prompt updated.")
                         .await?;

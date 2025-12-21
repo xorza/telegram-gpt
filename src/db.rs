@@ -197,3 +197,62 @@ where
 
     log::info!("Added chat turn to conversation {}", chat_id);
 }
+
+pub async fn set_openrouter_api_key(
+    db: &Arc<Mutex<Connection>>,
+    chat_id: ChatId,
+    openrouter_api_key: Option<&str>,
+) {
+    let conn = db.lock().await;
+    let updated = conn
+        .execute(
+            "UPDATE chats SET openrouter_api_key = ?2 WHERE chat_id = ?1",
+            rusqlite::params![chat_id.0, openrouter_api_key],
+        )
+        .expect("failed to update api key");
+
+    if updated != 1 {
+        fatal_panic(format!(
+            "failed to update api key for chat_id {} (updated {})",
+            chat_id.0, updated
+        ));
+    }
+}
+
+pub async fn set_model_id(db: &Arc<Mutex<Connection>>, chat_id: ChatId, model_id: Option<&str>) {
+    let conn = db.lock().await;
+    let updated = conn
+        .execute(
+            "UPDATE chats SET model_id = ?2 WHERE chat_id = ?1",
+            rusqlite::params![chat_id.0, model_id],
+        )
+        .expect("failed to update model id");
+
+    if updated != 1 {
+        fatal_panic(format!(
+            "failed to update model id for chat_id {} (updated {})",
+            chat_id.0, updated
+        ));
+    }
+}
+
+pub async fn set_system_prompt(
+    db: &Arc<Mutex<Connection>>,
+    chat_id: ChatId,
+    system_prompt: Option<&str>,
+) {
+    let conn = db.lock().await;
+    let updated = conn
+        .execute(
+            "UPDATE chats SET system_prompt = ?2 WHERE chat_id = ?1",
+            rusqlite::params![chat_id.0, system_prompt],
+        )
+        .expect("failed to update system prompt");
+
+    if updated != 1 {
+        fatal_panic(format!(
+            "failed to update system prompt for chat_id {} (updated {})",
+            chat_id.0, updated
+        ));
+    }
+}
