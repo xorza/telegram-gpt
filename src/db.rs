@@ -66,7 +66,7 @@ fn init_schema(conn: &Connection) {
             openrouter_api_key      TEXT,
             model_id                TEXT,
             system_prompt           TEXT,
-            user_name               TEXT
+            user_name               TEXT NOT NULL
         )",
         [],
     )
