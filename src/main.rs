@@ -118,13 +118,15 @@ impl App {
         self.maybe_update_user_name(&msg).await;
 
         let chat_id = msg.chat.id;
-        let is_group = msg.chat.is_group() || msg.chat.is_supergroup();
+
+        let is_public = msg.chat.is_group() || msg.chat.is_supergroup() || msg.chat.is_channel();
         log::info!("received message from chat {}", chat_id);
 
-        if self
-            .skip_group_message_if_unaddressed(chat_id, &msg)
-            .await?
-        {
+        if is_public && !self.should_process_group_message(&msg).await {
+            let user_message = self.extract_user_message(&msg).await?;
+            self.persist_messages(chat_id, std::slice::from_ref(&user_message))
+                .await;
+            log::info!("ignored group message without mention for chat {}", chat_id);
             return Ok(());
         }
 
@@ -137,14 +139,10 @@ impl App {
 
         let message_text = msg.text().unwrap().trim();
         if is_command(message_text) {
-            if is_group {
-                self.bot
-                    .send_message(chat_id, "Commands not allowed in chats")
-                    .await?;
-                return Ok(());
+            if !is_public {
+                self.process_command(chat_id, message_text).await?;
             }
 
-            self.process_command(chat_id, message_text).await?;
             return Ok(());
         }
 
@@ -164,25 +162,8 @@ impl App {
             openrouter_api::send(&self.http_client, &openai_api_key, payload).await
         };
 
-        self.handle_llm_response(chat_id, msg.id, is_group, user_message, llm_response)
+        self.handle_llm_response(chat_id, msg.id, is_public, user_message, llm_response)
             .await
-    }
-
-    async fn skip_group_message_if_unaddressed(
-        &self,
-        chat_id: ChatId,
-        msg: &Message,
-    ) -> anyhow::Result<bool> {
-        let is_group = msg.chat.is_group() || msg.chat.is_supergroup();
-        if is_group && !self.should_process_group_message(msg).await {
-            let user_message = self.extract_user_message(msg).await?;
-            self.persist_messages(chat_id, std::slice::from_ref(&user_message))
-                .await;
-            log::info!("ignored group message without mention for chat {}", chat_id);
-            return Ok(true);
-        }
-
-        Ok(false)
     }
 
     async fn ensure_authorized(&self, chat_id: ChatId) -> anyhow::Result<()> {
@@ -201,6 +182,7 @@ impl App {
     /// In group chats, only process messages that mention or reply to the bot; otherwise, just record them.
     async fn should_process_group_message(&self, msg: &Message) -> bool {
         let bot_username = self.bot_username.to_ascii_lowercase();
+
         let mentions_bot = msg
             .text()
             .map(|t| {
@@ -217,16 +199,12 @@ impl App {
                     && user
                         .username
                         .as_deref()
-                        .map(|u| u.eq_ignore_ascii_case(&self.bot_username))
+                        .map(|u| u.eq_ignore_ascii_case(&bot_username))
                         .unwrap_or(false)
             })
             .unwrap_or(false);
 
-        if mentions_bot || is_reply_to_bot {
-            return true;
-        }
-
-        false
+        mentions_bot || is_reply_to_bot
     }
 
     async fn handle_llm_response(
