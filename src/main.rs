@@ -21,7 +21,7 @@ use teloxide::types::CopyTextButton;
 use teloxide::utils::command::BotCommands;
 use teloxide::{
     prelude::*,
-    types::{ChatId, MessageId, ReactionType},
+    types::{ChatId, MessageId, ReactionType, ReplyParameters},
 };
 use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard, RwLock};
 use typing::TypingIndicator;
@@ -200,7 +200,12 @@ impl App {
 
         match llm_response {
             Ok(llm_response) => {
-                self.bot_split_send(chat_id, &llm_response.completion_text)
+                let reply_to = if msg.chat.is_group() || msg.chat.is_supergroup() {
+                    Some(msg.id)
+                } else {
+                    None
+                };
+                self.bot_split_send(chat_id, &llm_response.completion_text, reply_to)
                     .await?;
                 let assistant_message = conversation::Message {
                     role: MessageRole::Assistant,
@@ -224,9 +229,44 @@ impl App {
         Ok(())
     }
 
-    async fn bot_split_send(&self, chat_id: ChatId, text: &str) -> anyhow::Result<()> {
+    async fn send_message_checked(
+        &self,
+        chat_id: ChatId,
+        text: &str,
+        reply_to: Option<MessageId>,
+    ) -> anyhow::Result<()> {
+        assert!(
+            text.chars().count() <= TELEGRAM_MAX_MESSAGE_LENGTH,
+            "message exceeds telegram max length"
+        );
+
+        match reply_to {
+            Some(reply_id) => {
+                let reply = ReplyParameters {
+                    message_id: reply_id,
+                    ..Default::default()
+                };
+                self.bot
+                    .send_message(chat_id, text)
+                    .reply_parameters(reply)
+                    .await?;
+            }
+            None => {
+                self.bot.send_message(chat_id, text).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn bot_split_send(
+        &self,
+        chat_id: ChatId,
+        text: &str,
+        reply_to: Option<MessageId>,
+    ) -> anyhow::Result<()> {
         if text.chars().count() <= TELEGRAM_MAX_MESSAGE_LENGTH {
-            self.bot.send_message(chat_id, text).await?;
+            self.send_message_checked(chat_id, text, reply_to).await?;
             return Ok(());
         }
 
@@ -239,13 +279,14 @@ impl App {
             let token_len = token.chars().count();
             if token_len > TELEGRAM_MAX_MESSAGE_LENGTH {
                 if !buffer.is_empty() {
-                    self.bot.send_message(chat_id, &buffer).await?;
+                    self.send_message_checked(chat_id, &buffer, reply_to)
+                        .await?;
                     buffer.clear();
                     buffer_len = 0;
                 }
                 for ch in token.chars() {
                     if chunk_len == TELEGRAM_MAX_MESSAGE_LENGTH {
-                        self.bot.send_message(chat_id, &chunk).await?;
+                        self.send_message_checked(chat_id, &chunk, reply_to).await?;
                         chunk.clear();
                         chunk_len = 0;
                     }
@@ -253,14 +294,15 @@ impl App {
                     chunk_len += 1;
                 }
                 if !chunk.is_empty() {
-                    self.bot.send_message(chat_id, &chunk).await?;
+                    self.send_message_checked(chat_id, &chunk, reply_to).await?;
                     chunk.clear();
                     chunk_len = 0;
                 }
                 continue;
             }
             if buffer_len + token_len > TELEGRAM_MAX_MESSAGE_LENGTH && !buffer.is_empty() {
-                self.bot.send_message(chat_id, &buffer).await?;
+                self.send_message_checked(chat_id, &buffer, reply_to)
+                    .await?;
                 buffer.clear();
                 buffer_len = 0;
             }
@@ -270,7 +312,8 @@ impl App {
         }
 
         if !buffer.is_empty() {
-            self.bot.send_message(chat_id, &buffer).await?;
+            self.send_message_checked(chat_id, &buffer, reply_to)
+                .await?;
         }
 
         Ok(())
@@ -353,7 +396,7 @@ impl App {
                     "/approve [chat_id true|false] - admin only",
                 ]
                 .join("\n");
-                self.bot_split_send(chat_id, &message).await?;
+                self.bot_split_send(chat_id, &message, None).await?;
             }
             Command::Models => {
                 let models = self.models.read().await;
@@ -375,7 +418,7 @@ impl App {
                     .join("\n");
 
                 let message = format!("Available models:\n{}", models);
-                self.bot_split_send(chat_id, &message).await?;
+                self.bot_split_send(chat_id, &message, None).await?;
             }
             Command::Model(arg) => match arg {
                 CommandArg::Empty => {
@@ -528,7 +571,7 @@ impl App {
                         }
 
                         let message = format!("Pending users:\n{}", lines.join("\n"));
-                        self.bot_split_send(chat_id, &message).await?;
+                        self.bot_split_send(chat_id, &message, None).await?;
                     }
                     ApproveArg::ApproveChat {
                         chat_id: target_chat_id,
@@ -744,10 +787,10 @@ fn parse_command(text: &str, bot_username: &str) -> Result<Option<Command>, Stri
         None => (cmd_part, None),
     };
 
-    if let Some(mention) = mention {
-        if !mention.eq_ignore_ascii_case(bot_username) {
-            return Ok(None);
-        }
+    if let Some(mention) = mention
+        && !mention.eq_ignore_ascii_case(bot_username)
+    {
+        return Ok(None);
     }
 
     match cmd_name.to_ascii_lowercase().as_str() {
