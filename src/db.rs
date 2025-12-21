@@ -61,7 +61,8 @@ fn init_schema(conn: &Connection) {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS chats (
             chat_id                 INTEGER PRIMARY KEY NOT NULL,
-            is_authorized           BOOLEAN NOT NULL,
+            is_authorized           BOOLEAN NOT NULL DEFAULT 0,
+            is_admin                BOOLEAN NOT NULL DEFAULT 0,
             openrouter_api_key      TEXT,
             model_id                TEXT,
             system_prompt           TEXT,
@@ -86,27 +87,29 @@ pub async fn load_conversation(db: &Arc<Mutex<Connection>>, chat_id: ChatId) -> 
     let conn = db.lock().await;
 
     // Fetch exactly one chat row; panic if multiple rows are found.
-    let (is_authorized, openrouter_api_key, model_id, system_prompt, user_name) = conn
+    let (is_authorized, is_admin, openrouter_api_key, model_id, system_prompt, user_name) = conn
                 .query_row(
-                    "SELECT is_authorized, openrouter_api_key, model_id, system_prompt, user_name FROM chats WHERE chat_id = ?1",
+                    "SELECT is_authorized, is_admin, openrouter_api_key, model_id, system_prompt, user_name FROM chats WHERE chat_id = ?1",
                     [chat_id.0],
                     |row| {
                         Ok((
                             row.get::<_, bool>(0)?,
-                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, bool>(1)?,
                             row.get::<_, Option<String>>(2)?,
                             row.get::<_, Option<String>>(3)?,
                             row.get::<_, Option<String>>(4)?,
+                            row.get::<_, Option<String>>(5)?,
                         ))
                     },
                 )
                 .or_else(|err| {
                     if matches!(err, rusqlite::Error::QueryReturnedNoRows) {
                         let r = conn.execute(
-                            "INSERT INTO chats (chat_id, is_authorized, openrouter_api_key, model_id, system_prompt, user_name) \
-                            VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                            "INSERT INTO chats (chat_id, is_authorized, is_admin, openrouter_api_key, model_id, system_prompt, user_name) \
+                            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                             rusqlite::params![
                                 chat_id.0,
+                                false,
                                 false,
                                 Option::<String>::None,
                                 Option::<String>::None,
@@ -120,7 +123,7 @@ pub async fn load_conversation(db: &Arc<Mutex<Connection>>, chat_id: ChatId) -> 
                                 chat_id.0
                             ));
                         }
-                        Ok((false, None, None, None, None))
+                        Ok((false, false, None, None, None, None))
                     } else {
                         Err(err)
                     }
@@ -138,6 +141,7 @@ pub async fn load_conversation(db: &Arc<Mutex<Connection>>, chat_id: ChatId) -> 
         chat_id: chat_id.0 as u64,
         history: Default::default(),
         is_authorized,
+        is_admin,
         openrouter_api_key,
         model_id,
         system_prompt,
