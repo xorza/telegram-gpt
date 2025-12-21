@@ -230,30 +230,10 @@ impl App {
             return Ok(());
         }
 
-        fn split_long_token(token: &str, max_len: usize) -> Vec<String> {
-            let mut parts = Vec::new();
-            let mut buffer = String::new();
-            let mut buffer_len = 0usize;
-
-            for ch in token.chars() {
-                if buffer_len == max_len {
-                    parts.push(buffer);
-                    buffer = String::new();
-                    buffer_len = 0;
-                }
-                buffer.push(ch);
-                buffer_len += 1;
-            }
-
-            if !buffer.is_empty() {
-                parts.push(buffer);
-            }
-
-            parts
-        }
-
         let mut buffer = String::new();
         let mut buffer_len = 0usize;
+        let mut chunk = String::new();
+        let mut chunk_len = 0usize;
 
         for token in text.split_inclusive([' ', '\n']) {
             let token_len = token.chars().count();
@@ -263,8 +243,19 @@ impl App {
                     buffer.clear();
                     buffer_len = 0;
                 }
-                for part in split_long_token(token, TELEGRAM_MAX_MESSAGE_LENGTH) {
-                    self.bot.send_message(chat_id, &part).await?;
+                for ch in token.chars() {
+                    if chunk_len == TELEGRAM_MAX_MESSAGE_LENGTH {
+                        self.bot.send_message(chat_id, &chunk).await?;
+                        chunk.clear();
+                        chunk_len = 0;
+                    }
+                    chunk.push(ch);
+                    chunk_len += 1;
+                }
+                if !chunk.is_empty() {
+                    self.bot.send_message(chat_id, &chunk).await?;
+                    chunk.clear();
+                    chunk_len = 0;
                 }
                 continue;
             }
