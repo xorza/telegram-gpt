@@ -25,15 +25,21 @@ use typing::TypingIndicator;
 
 const DEFAULT_MODEL_FALLBACK: &str = "xiaomi/mimo-v2-flash:free";
 
-/// Return a minimally identifying, masked version of an API key.
+/// Return a minimally identifying, masked version of an API key, e.g. `sk-or-v1-bab...68c`.
 fn mask_api_key(key: &str) -> String {
-    let prefix_len = key.len().min(3);
-    let suffix_len = key.len().saturating_sub(prefix_len).min(4);
+    if key.len() <= 8 {
+        // Very short keys: show first up to 3 chars and mask the rest.
+        let prefix_len = key.len().min(3);
+        return format!("{}***", &key[..prefix_len]);
+    }
+
+    let prefix_len = key.len().min(11);
+    let suffix_len = key.len().saturating_sub(prefix_len).min(3).max(1);
+
     let prefix = &key[..prefix_len];
     let suffix = &key[key.len().saturating_sub(suffix_len)..];
-    let masked_len = key.len().saturating_sub(prefix_len + suffix_len).max(6);
 
-    format!("{prefix}{}{}", "*".repeat(masked_len), suffix)
+    format!("{prefix}...{suffix}")
 }
 
 #[derive(Debug, Clone)]
@@ -460,7 +466,7 @@ impl App {
                                 .send_message(
                                     chat_id,
                                     format!(
-                                        "API key is set (masked)\\: `{}`",
+                                        "API key is set \\(masked\\)\\: `{}`",
                                         telegram::escape_markdown_v2(&masked_key)
                                     ),
                                 )
