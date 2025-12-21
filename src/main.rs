@@ -298,7 +298,14 @@ impl App {
                 commands::CommandArg::None => {
                     {
                         let mut conv = self.get_conversation(chat_id).await;
+                        let old_model = self.resolve_model(conv.model_id.as_deref()).await;
                         conv.model_id = None;
+                        let new_model = self.resolve_model(None).await;
+                        let should_reload = old_model.id != new_model.id
+                            && new_model.context_length >= old_model.context_length;
+                        if should_reload {
+                            db::load_history(&self.db, &mut conv, new_model.token_budget()).await;
+                        }
                     }
                     db::set_model_id(&self.db, chat_id, None).await;
                     self.bot
@@ -312,7 +319,13 @@ impl App {
                     if let Some(model) = selected_model {
                         {
                             let mut conv = self.get_conversation(chat_id).await;
+                            let old_model = self.resolve_model(conv.model_id.as_deref()).await;
                             conv.model_id = Some(model.id.clone());
+                            let should_reload = old_model.id != model.id
+                                && model.context_length >= old_model.context_length;
+                            if should_reload {
+                                db::load_history(&self.db, &mut conv, model.token_budget()).await;
+                            }
                         }
                         db::set_model_id(&self.db, chat_id, Some(&model.id)).await;
                         log::info!("User {} selected model: `{}`", chat_id, model.name);
