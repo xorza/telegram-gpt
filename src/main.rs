@@ -127,7 +127,7 @@ impl App {
         if is_group
             && !self
                 .should_process_group_message(chat_id, &msg, &user_message)
-                .await?
+                .await
         {
             return Ok(());
         }
@@ -170,11 +170,7 @@ impl App {
 
         match llm_response {
             Ok(llm_response) => {
-                let reply_to = if msg.chat.is_group() || msg.chat.is_supergroup() {
-                    Some(msg.id)
-                } else {
-                    None
-                };
+                let reply_to = if is_group { Some(msg.id) } else { None };
                 telegram::bot_split_send(
                     &self.bot,
                     chat_id,
@@ -210,7 +206,7 @@ impl App {
         chat_id: ChatId,
         msg: &Message,
         user_message: &conversation::Message,
-    ) -> anyhow::Result<bool> {
+    ) -> bool {
         let bot_username = self.bot_username.to_ascii_lowercase();
         let mentions_bot = msg
             .text()
@@ -234,13 +230,14 @@ impl App {
             .unwrap_or(false);
 
         if mentions_bot || is_reply_to_bot {
-            return Ok(true);
+            return true;
         }
 
         self.persist_messages(chat_id, std::slice::from_ref(user_message))
             .await;
         log::info!("ignored group message without mention for chat {}", chat_id);
-        Ok(false)
+
+        false
     }
 
     async fn maybe_update_user_name(&self, msg: &Message) {
