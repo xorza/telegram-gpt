@@ -180,21 +180,11 @@ impl App {
 
         let typing_indicator = TypingIndicator::new(self.bot.clone(), chat_id);
 
-        let on_stream_delta = {
-            let bot = self.bot.clone();
-            let stream_buffer = Arc::new(tokio::sync::Mutex::new(String::new()));
-
-            move |delta: String, finalize| {
-                handle_stream_delta(bot.clone(), chat_id, stream_buffer.clone(), delta, finalize)
-            }
-        };
 
         let llm_response = openrouter_api::send(
             &self.http_client,
             &openai_api_key,
-            payload,
-            STREAM_RESPONSE,
-            on_stream_delta,
+            payload
         )
         .await;
 
