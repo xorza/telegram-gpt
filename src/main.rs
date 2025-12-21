@@ -1,6 +1,3 @@
-#![allow(unused_imports)]
-#![allow(dead_code)]
-
 mod commands;
 mod conversation;
 mod db;
@@ -10,7 +7,6 @@ mod panic_handler;
 mod telegram;
 mod typing;
 
-use anyhow::{Context, anyhow};
 use conversation::{Conversation, MessageRole};
 use flexi_logger::{Cleanup, Criterion, Duplicate, FileSpec, Logger, Naming};
 use std::{collections::HashMap, sync::Arc};
@@ -221,6 +217,13 @@ impl App {
     ) -> anyhow::Result<()> {
         match llm_response {
             Ok(llm_response) => {
+                log::info!(
+                    "LLM usage: prompt_tokens={}, completion_tokens={}, total_tokens={}, cost={}",
+                    llm_response.prompt_tokens,
+                    llm_response.completion_tokens,
+                    llm_response.total_tokens,
+                    llm_response.cost
+                );
                 let reply_to = if is_group { Some(msg_id) } else { None };
                 telegram::bot_split_send(
                     &self.bot,

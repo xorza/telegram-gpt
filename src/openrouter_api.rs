@@ -1,6 +1,5 @@
 use crate::conversation::{Message, MessageRole};
 use anyhow::{Context, anyhow};
-use log::info;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
@@ -38,7 +37,6 @@ struct ModelRecord {
 
 #[derive(Debug, Deserialize)]
 struct TopProvider {
-    context_length: Option<u64>,
     max_completion_tokens: Option<u64>,
 }
 

@@ -1,7 +1,6 @@
 use crate::conversation::{self, Conversation, Message, MessageRole};
 use crate::openrouter_api;
 use crate::panic_handler::fatal_panic;
-use anyhow::Result;
 use teloxide::types::ChatId;
 use tokio_rusqlite::Connection;
 use tokio_rusqlite::rusqlite::{Connection as SyncConnection, Error as SqliteError, params};

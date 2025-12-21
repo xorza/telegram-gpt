@@ -1,5 +1,4 @@
-use log::warn;
-use std::{collections::VecDeque, fmt::Display, sync::Arc};
+use std::{collections::VecDeque, fmt::Display};
 
 use crate::openrouter_api;
 
@@ -31,10 +30,6 @@ pub enum MessageRole {
 }
 
 impl Conversation {
-    pub fn add_message(&mut self, message: Message) {
-        self.history.push_back(message);
-    }
-
     pub fn add_messages<I>(&mut self, messages: I)
     where
         I: IntoIterator<Item = Message>,
