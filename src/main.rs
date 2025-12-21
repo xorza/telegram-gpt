@@ -13,7 +13,6 @@ mod typing;
 use anyhow::{Context, anyhow};
 use conversation::{Conversation, MessageRole};
 use flexi_logger::{Cleanup, Criterion, Duplicate, FileSpec, Logger, Naming};
-use rusqlite::Connection;
 use std::{collections::HashMap, sync::Arc};
 use telegram::{bot_split_send_formatted, escape_markdown_v2};
 use teloxide::{
@@ -34,7 +33,7 @@ fn mask_api_key(key: &str) -> String {
     }
 
     let prefix_len = key.len().min(11);
-    let suffix_len = key.len().saturating_sub(prefix_len).min(3).max(1);
+    let suffix_len = key.len().saturating_sub(prefix_len).clamp(1, 3);
 
     let prefix = &key[..prefix_len];
     let suffix = &key[key.len().saturating_sub(suffix_len)..];
@@ -49,7 +48,7 @@ struct App {
     http_client: reqwest::Client,
     models: Arc<RwLock<Vec<openrouter_api::ModelSummary>>>,
     conversations: Arc<Mutex<HashMap<ChatId, Conversation>>>,
-    db: Arc<Mutex<Connection>>,
+    db: Arc<tokio_rusqlite::Connection>,
     system_prompt0: conversation::Message,
     default_model: String,
 }
@@ -102,7 +101,7 @@ async fn init() -> App {
         .username
         .unwrap_or_default();
     let models = models::spawn_model_refresh(http_client.clone()).await;
-    let db = Arc::new(Mutex::new(db::init_db()));
+    let db = Arc::new(db::init_db().await);
     let conversations: Arc<Mutex<HashMap<ChatId, Conversation>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let system_text0 = "You are a Telegram bot. In group chats you may see many messages, but only treat the latest message that explicitly mentions @<bot_name> (or replies to you) as the user's prompt; ignore the rest. Respond in plain text only (no Markdown).".to_string();

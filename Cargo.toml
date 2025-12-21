@@ -14,5 +14,5 @@ serde = { version = "*", features = ["derive"] }
 serde_json = "*"
 reqwest = { version = "*", default-features = false, features = ["json", "rustls-tls"] }
 anyhow = "*"
-rusqlite = { version = "*", features = ["bundled"] }
+tokio-rusqlite = { version = "*", features = ["bundled"] }
 futures-util = "*"
