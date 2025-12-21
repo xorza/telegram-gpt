@@ -266,17 +266,24 @@ impl App {
         };
 
         let chat_id = msg.chat.id;
-        let should_update = {
+        let (should_update, old_name) = {
             let mut conv = self.get_conversation(chat_id).await;
             if conv.user_name.as_deref() != Some(user_name.as_str()) {
+                let old_name = conv.user_name.clone();
                 conv.user_name = Some(user_name.clone());
-                true
+                (true, old_name)
             } else {
-                false
+                (false, None)
             }
         };
 
         if should_update {
+            log::info!(
+                "Updating user name for chat {}: {:?} -> {:?}",
+                chat_id,
+                old_name,
+                user_name
+            );
             db::set_user_name(&self.db, chat_id, Some(&user_name)).await;
         }
     }
