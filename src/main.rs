@@ -301,7 +301,14 @@ impl App {
                     };
                     let model = self.resolve_model(current_model_id.as_deref()).await;
                     self.bot
-                        .send_message(chat_id, format!("Current model: `{}`", model.id))
+                        .send_message(
+                            chat_id,
+                            format!(
+                                "Current model\\: `{}`",
+                                telegram::escape_markdown_v2(&model.id)
+                            ),
+                        )
+                        .parse_mode(ParseMode::MarkdownV2)
                         .await?;
                 }
                 commands::CommandArg::None => {
@@ -339,7 +346,13 @@ impl App {
                         db::set_model_id(&self.db, chat_id, Some(&model.id)).await;
                         log::info!("User {} selected model: `{}`", chat_id, model.name);
                         self.bot
-                            .send_message(chat_id, format!("Selected model: `{}`", model.name))
+                            .send_message(
+                                chat_id,
+                                format!(
+                                    "Selected model\\: `{}`",
+                                    telegram::escape_markdown_v2(&model.name)
+                                ),
+                            )
                             .await?;
                     } else {
                         log::warn!(
@@ -348,7 +361,13 @@ impl App {
                             model_id
                         );
                         self.bot
-                            .send_message(chat_id, format!("Model not found: `{}`", model_id))
+                            .send_message(
+                                chat_id,
+                                format!(
+                                    "Model not found\\: `{}`",
+                                    telegram::escape_markdown_v2(&model_id)
+                                ),
+                            )
                             .await?;
                     }
                 }
@@ -362,7 +381,14 @@ impl App {
                     match current_key {
                         Some(key) => {
                             self.bot
-                                .send_message(chat_id, format!("Current API key: `{}`", key))
+                                .send_message(
+                                    chat_id,
+                                    format!(
+                                        "Current API key\\: `{}`",
+                                        telegram::escape_markdown_v2(&key)
+                                    ),
+                                )
+                                .parse_mode(ParseMode::MarkdownV2)
                                 .await?;
                         }
                         None => {
@@ -398,8 +424,12 @@ impl App {
                             self.bot
                                 .send_message(
                                     chat_id,
-                                    format!("Current system prompt: `{}`", prompt),
+                                    format!(
+                                        "Current system prompt\\: ```\n{}\n```",
+                                        telegram::escape_markdown_v2(&prompt)
+                                    ),
                                 )
+                                .parse_mode(ParseMode::MarkdownV2)
                                 .await?;
                         }
                         None => {
@@ -457,7 +487,7 @@ impl App {
                             lines.push(format!("`{}` \\- {}", pending_id, display_name));
                         }
 
-                        let message = format!("Pending users:\n{}", lines.join("\n"));
+                        let message = format!("Pending users\\:\n{}", lines.join("\n"));
                         bot_split_send_formatted(
                             &self.bot,
                             chat_id,
@@ -471,7 +501,7 @@ impl App {
                         chat_id: target_chat_id,
                         is_authorized,
                     } => {
-                        let target_id = ChatId(target_chat_id as i64);
+                        let target_id = ChatId(target_chat_id);
                         let result =
                             db::set_is_authorized(&self.db, target_id, is_authorized).await;
                         if result.is_err() {
@@ -486,10 +516,8 @@ impl App {
                                 }
                             }
 
-                            let message = format!(
-                                "Updated chat {} is_authorized={}",
-                                target_chat_id, is_authorized
-                            );
+                            let message =
+                                format!("Chat {} approved: {}", target_chat_id, is_authorized);
                             self.bot.send_message(chat_id, message).await?;
                         }
                     }

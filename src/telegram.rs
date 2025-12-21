@@ -32,12 +32,12 @@ async fn send_formatted_checked(
             };
             bot.send_message(chat_id, text)
                 .reply_parameters(reply)
-                .parse_mode(parse_mode.clone())
+                .parse_mode(parse_mode)
                 .await?;
         }
         None => {
             bot.send_message(chat_id, text)
-                .parse_mode(parse_mode.clone())
+                .parse_mode(parse_mode)
                 .await?;
         }
     }
@@ -99,7 +99,7 @@ pub async fn bot_split_send_formatted(
         }
 
         if buffer_len + required > TELEGRAM_MAX_MESSAGE_LENGTH {
-            send_formatted_checked(bot, chat_id, &buffer, reply_to, parse_mode.clone()).await?;
+            send_formatted_checked(bot, chat_id, &buffer, reply_to, parse_mode).await?;
             buffer.clear();
             buffer_len = 0;
         }
