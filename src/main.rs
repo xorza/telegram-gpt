@@ -116,10 +116,44 @@ impl App {
             return Ok(());
         }
 
+        self.maybe_update_user_name(&msg).await;
+
         let chat_id = msg.chat.id;
         log::info!("received message from chat {}", chat_id);
 
-        self.maybe_update_user_name(&msg).await;
+        let user_message = self.extract_user_message(chat_id, &msg).await?;
+
+        // In group chats, only respond when explicitly mentioned or replied to; otherwise just log the message.
+        let is_group = msg.chat.is_group() || msg.chat.is_supergroup();
+        if is_group {
+            let bot_username = self.bot_username.to_ascii_lowercase();
+            let mentions_bot = msg
+                .text()
+                .map(|t| {
+                    t.to_ascii_lowercase()
+                        .contains(&format!("@{}", bot_username))
+                })
+                .unwrap_or(false);
+            let is_reply_to_bot = msg
+                .reply_to_message()
+                .and_then(|m| m.from.as_ref())
+                .map(|user| {
+                    user.is_bot
+                        && user
+                            .username
+                            .as_deref()
+                            .map(|u| u.eq_ignore_ascii_case(&self.bot_username))
+                            .unwrap_or(false)
+                })
+                .unwrap_or(false);
+
+            if !mentions_bot && !is_reply_to_bot {
+                self.persist_messages(chat_id, std::slice::from_ref(&user_message))
+                    .await;
+                log::info!("ignored group message without mention for chat {}", chat_id);
+                return Ok(());
+            }
+        }
 
         if !self.get_conversation(chat_id).await.is_authorized {
             let message = format!(
@@ -130,10 +164,16 @@ impl App {
             return Err(anyhow::anyhow!("Unauthorized"));
         }
 
-        let user_message = self.extract_user_message(chat_id, &msg).await?;
         if user_message.text.starts_with("/") {
-            self.process_command(chat_id, &user_message).await?;
-            return Ok(());
+            if is_group {
+                self.process_command(chat_id, &user_message).await?;
+                return Ok(());
+            } else {
+                self.bot
+                    .send_message(chat_id, "Commands not allowed in private chats")
+                    .await?;
+                return Ok(());
+            }
         }
 
         let (payload, openai_api_key) = match self.prepare_llm_request(chat_id, &user_message).await
