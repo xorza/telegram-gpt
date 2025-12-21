@@ -5,3 +5,4 @@ AI coding rules for this project:
 - Use Result<> only for expected/legitimate failures (e.g., network, I/O, external services).
 - Always add #[debug] to Rust structs
 - Always run `cargo check` and `cargo clippy` before confirming output.
+- Add asserts for function input arguments and outputs where applicable, so logic errors crash instead of being swallowed.
