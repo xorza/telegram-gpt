@@ -268,11 +268,7 @@ impl App {
                 self.bot_split_send(chat_id, &message).await?;
             }
             "/model" => {
-                let model_id = user_message
-                    .text
-                    .trim_start_matches("/model ")
-                    .trim()
-                    .to_string();
+                let model_id = user_message.text.trim_start_matches("/model ").trim();
                 let available_models = self.models.read().await;
                 let selected_model = available_models.iter().find(|m| m.id == model_id);
 
@@ -294,6 +290,26 @@ impl App {
                     self.bot
                         .send_message(chat_id, format!("Model not found: `{}`", model_id))
                         .await?;
+                }
+            }
+            "/key" => {
+                let key = user_message.text.trim_start_matches("/key ").trim();
+                if key.is_empty() {
+                    let current_key = {
+                        let conv = self.get_conversation(chat_id).await;
+                        conv.openrouter_api_key
+                            .clone()
+                            .unwrap_or_else(|| "None".to_string())
+                    };
+                    self.bot
+                        .send_message(chat_id, format!("Current API key: `{}`", current_key))
+                        .await?;
+                } else {
+                    {
+                        let mut conv = self.get_conversation(chat_id).await;
+                        conv.openrouter_api_key = Some(key.to_string());
+                    }
+                    self.bot.send_message(chat_id, "API key updated.").await?;
                 }
             }
             _ => {
