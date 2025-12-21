@@ -18,6 +18,7 @@ use std::fmt::Debug;
 use std::{collections::HashMap, path::Path, sync::Arc};
 use teloxide::RequestError;
 use teloxide::types::CopyTextButton;
+use teloxide::utils::command::BotCommands;
 use teloxide::{
     prelude::*,
     types::{ChatId, MessageId, ReactionType},
@@ -32,6 +33,7 @@ const STREAM_RESPONSE: bool = false;
 #[derive(Debug, Clone)]
 struct App {
     bot: Bot,
+    bot_username: String,
     http_client: reqwest::Client,
     models: Arc<RwLock<Vec<openrouter_api::ModelSummary>>>,
     conversations: Arc<Mutex<HashMap<ChatId, Conversation>>>,
@@ -80,6 +82,13 @@ async fn init() -> App {
 
     let bot = Bot::from_env();
     let http_client = reqwest::Client::new();
+    let bot_username = bot
+        .get_me()
+        .await
+        .expect("failed to fetch bot user info")
+        .user
+        .username
+        .unwrap_or_default();
     let models = spawn_model_refresh(http_client.clone()).await;
     let db = Arc::new(Mutex::new(db::init_db()));
     let conversations: Arc<Mutex<HashMap<ChatId, Conversation>>> =
@@ -96,6 +105,7 @@ async fn init() -> App {
 
     App {
         bot,
+        bot_username,
         http_client,
         models,
         conversations,
@@ -293,17 +303,23 @@ impl App {
         chat_id: ChatId,
         user_message: &conversation::Message,
     ) -> anyhow::Result<()> {
-        let text = user_message.text.trim();
-        let mut parts = text.splitn(2, char::is_whitespace);
-        let command = parts.next().unwrap_or("");
-        let arg_text = match parts.next().map(str::trim) {
-            None | Some("") => CommandArg::Empty,
-            Some(arg) if arg.to_lowercase() == "none" => CommandArg::None,
-            Some(arg) => CommandArg::Text(arg.to_string()),
+        let command = match Command::parse(user_message.text.as_str(), &self.bot_username) {
+            Ok(command) => command,
+            Err(err) => {
+                log::warn!("Failed to parse command: {err}");
+                self.bot.send_message(chat_id, "Unknown command").await?;
+                return Ok(());
+            }
         };
-        log::info!("Received command: {}", command);
+
+        log::info!("Received command: {:?}", command);
         match command {
-            "/models" => {
+            Command::Help => {
+                self.bot
+                    .send_message(chat_id, Command::descriptions().to_string())
+                    .await?;
+            }
+            Command::Models => {
                 let models = self.models.read().await;
                 let models = models
                     .iter()
@@ -325,7 +341,7 @@ impl App {
                 let message = format!("Available models:\n{}", models);
                 self.bot_split_send(chat_id, &message).await?;
             }
-            "/model" => match arg_text {
+            Command::Model(arg) => match CommandArg::from_text(&arg) {
                 CommandArg::Empty => {
                     let current_model_id = {
                         let conv = self.get_conversation(chat_id).await;
@@ -372,7 +388,7 @@ impl App {
                     }
                 }
             },
-            "/key" => match arg_text {
+            Command::Key(arg) => match CommandArg::from_text(&arg) {
                 CommandArg::Empty => {
                     let current_key = {
                         let conv = self.get_conversation(chat_id).await;
@@ -406,7 +422,7 @@ impl App {
                     self.bot.send_message(chat_id, "API key updated.").await?;
                 }
             },
-            "/system_prompt" => match arg_text {
+            Command::SystemPrompt(arg) => match CommandArg::from_text(&arg) {
                 CommandArg::Empty => {
                     let current_prompt = {
                         let conv = self.get_conversation(chat_id).await;
@@ -452,9 +468,6 @@ impl App {
                         .await?;
                 }
             },
-            _ => {
-                self.bot.send_message(chat_id, "Unknown command").await?;
-            }
         }
         Ok(())
     }
@@ -577,6 +590,34 @@ enum CommandArg {
     Empty,
     None,
     Text(String),
+}
+
+impl CommandArg {
+    fn from_text(text: &str) -> Self {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            CommandArg::Empty
+        } else if trimmed.eq_ignore_ascii_case("none") {
+            CommandArg::None
+        } else {
+            CommandArg::Text(trimmed.to_string())
+        }
+    }
+}
+
+#[derive(BotCommands, Clone, Debug)]
+#[command(rename_rule = "lowercase", description = "Available commands:")]
+enum Command {
+    /// Show this help text.
+    Help,
+    /// List available models.
+    Models,
+    /// Get/set the model (use `none` to clear).
+    Model(String),
+    /// Get/set the API key (use `none` to clear).
+    Key(String),
+    /// Get/set the system prompt (use `none` to clear).
+    SystemPrompt(String),
 }
 
 #[derive(Debug)]
