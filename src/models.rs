@@ -33,7 +33,7 @@ pub async fn spawn_model_refresh(
                     attempt
                 );
                 attempt += 1;
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
             }
         }
     }

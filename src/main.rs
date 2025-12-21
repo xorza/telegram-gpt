@@ -78,9 +78,13 @@ async fn init() -> App {
 
     let bot = Bot::from_env();
     let http_client = reqwest::Client::new();
-    let bot_username = fetch_bot_username(&bot).await;
-    let models = models::spawn_model_refresh(http_client.clone()).await;
-    let db = db::init_db().await;
+
+    let (bot_username, models, db) = tokio::join!(
+        fetch_bot_username(&bot),
+        models::spawn_model_refresh(http_client.clone()),
+        db::init_db()
+    );
+
     let conversations: Arc<Mutex<HashMap<ChatId, Conversation>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let group_llm_rate_limits: Arc<Mutex<HashMap<ChatId, VecDeque<Instant>>>> =
@@ -843,7 +847,7 @@ async fn fetch_bot_username(bot: &Bot) -> String {
             }
             Err(err) => {
                 log::warn!("failed to fetch bot user info: {err}; retrying in 5s");
-                time::sleep(std::time::Duration::from_secs(5)).await;
+                time::sleep(std::time::Duration::from_secs(30)).await;
             }
         }
     }
