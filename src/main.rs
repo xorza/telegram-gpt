@@ -278,6 +278,15 @@ impl App {
                     self.bot
                         .send_message(chat_id, format!("Current model: `{}`", model.id))
                         .await?;
+                } else if model_id.to_lowercase() == "none" {
+                    {
+                        let mut conv = self.get_conversation(chat_id).await;
+                        conv.model_id = None;
+                    }
+                    db::set_model_id(&self.db, chat_id, None).await;
+                    self.bot
+                        .send_message(chat_id, "Model cleared; using default.")
+                        .await?;
                 } else {
                     let available_models = self.models.read().await;
                     let selected_model = available_models.iter().find(|m| m.id == model_id);
@@ -321,6 +330,13 @@ impl App {
                             self.bot.send_message(chat_id, "No API key set.").await?;
                         }
                     }
+                } else if key.to_lowercase() == "none" {
+                    {
+                        let mut conv = self.get_conversation(chat_id).await;
+                        conv.openrouter_api_key = None;
+                    }
+                    db::set_openrouter_api_key(&self.db, chat_id, None).await;
+                    self.bot.send_message(chat_id, "API key cleared.").await?;
                 } else {
                     {
                         let mut conv = self.get_conversation(chat_id).await;
@@ -355,6 +371,15 @@ impl App {
                                 .await?;
                         }
                     }
+                } else if prompt.to_lowercase() == "none" {
+                    {
+                        let mut conv = self.get_conversation(chat_id).await;
+                        conv.system_prompt = None;
+                    }
+                    db::set_system_prompt(&self.db, chat_id, None).await;
+                    self.bot
+                        .send_message(chat_id, "System prompt cleared.")
+                        .await?;
                 } else {
                     {
                         let mut conv = self.get_conversation(chat_id).await;
