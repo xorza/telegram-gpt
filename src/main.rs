@@ -114,16 +114,18 @@ impl App {
         if !matches!(msg.kind, MessageKind::Common(..)) {
             return Ok(());
         }
+        if msg.text().is_none() {
+            return Ok(());
+        }
 
         self.maybe_update_user_name(&msg).await;
 
         let chat_id = msg.chat.id;
+        let is_group = msg.chat.is_group() || msg.chat.is_supergroup();
         log::info!("received message from chat {}", chat_id);
 
-        let user_message = self.extract_user_message(chat_id, &msg).await?;
-
-        let is_group = msg.chat.is_group() || msg.chat.is_supergroup();
         if is_group && !self.should_process_group_message(&msg).await {
+            let user_message = self.extract_user_message(&msg).await?;
             self.persist_messages(chat_id, std::slice::from_ref(&user_message))
                 .await;
             log::info!("ignored group message without mention for chat {}", chat_id);
@@ -145,18 +147,20 @@ impl App {
             return Err(anyhow::anyhow!("Unauthorized"));
         }
 
-        if user_message.text.starts_with("/") {
+        let message_text = msg.text().unwrap().trim();
+        if message_text.starts_with("/") {
             if is_group {
                 self.bot
                     .send_message(chat_id, "Commands not allowed in chats")
                     .await?;
                 return Ok(());
             } else {
-                self.process_command(chat_id, &user_message).await?;
+                self.process_command(chat_id, message_text).await?;
                 return Ok(());
             }
         }
 
+        let user_message = self.extract_user_message(&msg).await?;
         let (payload, openai_api_key) = match self.prepare_llm_request(chat_id, &user_message).await
         {
             Ok(ready) => (ready.payload, ready.openrouter_api_key),
@@ -172,34 +176,8 @@ impl App {
             openrouter_api::send(&self.http_client, &openai_api_key, payload).await
         };
 
-        match llm_response {
-            Ok(llm_response) => {
-                let reply_to = if is_group { Some(msg.id) } else { None };
-                telegram::bot_split_send(
-                    &self.bot,
-                    chat_id,
-                    &llm_response.completion_text,
-                    reply_to,
-                )
-                .await?;
-                let assistant_message = conversation::Message {
-                    role: MessageRole::Assistant,
-                    text: llm_response.completion_text,
-                };
-                let messages = [user_message, assistant_message];
-                self.persist_messages(chat_id, &messages).await;
-            }
-            Err(err) => {
-                log::error!("failed to get llm response: {err}");
-
-                self.bot
-                    .set_message_reaction(chat_id, msg.id)
-                    .reaction(vec![ReactionType::Emoji {
-                        emoji: "🖕".to_string(),
-                    }])
-                    .await?;
-            }
-        }
+        self.handle_llm_response(chat_id, msg.id, is_group, user_message, llm_response)
+            .await?;
 
         Ok(())
     }
@@ -233,6 +211,46 @@ impl App {
         }
 
         false
+    }
+
+    async fn handle_llm_response(
+        &self,
+        chat_id: ChatId,
+        msg_id: MessageId,
+        is_group: bool,
+        user_message: conversation::Message,
+        llm_response: anyhow::Result<openrouter_api::Response>,
+    ) -> anyhow::Result<()> {
+        match llm_response {
+            Ok(llm_response) => {
+                let reply_to = if is_group { Some(msg_id) } else { None };
+                telegram::bot_split_send(
+                    &self.bot,
+                    chat_id,
+                    &llm_response.completion_text,
+                    reply_to,
+                )
+                .await?;
+                let assistant_message = conversation::Message {
+                    role: MessageRole::Assistant,
+                    text: llm_response.completion_text,
+                };
+                let messages = [user_message, assistant_message];
+                self.persist_messages(chat_id, &messages).await;
+            }
+            Err(err) => {
+                log::error!("failed to get llm response: {err}");
+
+                self.bot
+                    .set_message_reaction(chat_id, msg_id)
+                    .reaction(vec![ReactionType::Emoji {
+                        emoji: "🖕".to_string(),
+                    }])
+                    .await?;
+            }
+        }
+
+        Ok(())
     }
 
     async fn maybe_update_user_name(&self, msg: &Message) {
@@ -284,13 +302,8 @@ impl App {
         }
     }
 
-    async fn process_command(
-        &self,
-        chat_id: ChatId,
-        user_message: &conversation::Message,
-    ) -> anyhow::Result<()> {
-        let command = match commands::parse_command(user_message.text.as_str(), &self.bot_username)
-        {
+    async fn process_command(&self, chat_id: ChatId, message_text: &str) -> anyhow::Result<()> {
+        let command = match commands::parse_command(message_text, &self.bot_username) {
             Ok(commands::Command::Ignore) => {
                 // Command addressed to a different bot; ignore silently.
                 return Ok(());
@@ -591,20 +604,11 @@ impl App {
         Ok(())
     }
 
-    async fn extract_user_message(
-        &self,
-        chat_id: ChatId,
-        msg: &Message,
-    ) -> anyhow::Result<conversation::Message> {
-        let mut user_text = match msg.text() {
-            Some(t) => t.trim().to_owned(),
-            None => {
-                self.bot
-                    .send_message(chat_id, "Only text messages are supported.")
-                    .await?;
-                return Err(anyhow::anyhow!("Only text messages are supported."));
-            }
-        };
+    async fn extract_user_message(&self, msg: &Message) -> anyhow::Result<conversation::Message> {
+        let mut user_text = msg
+            .text()
+            .expect("Only text messages are supported.")
+            .to_owned();
 
         if !user_text.starts_with('/') {
             let replied_text = msg
