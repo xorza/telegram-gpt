@@ -59,7 +59,7 @@ fn init_schema(conn: &SyncConnection) {
             chat_id     INTEGER NOT NULL,
             role        INTEGER NOT NULL,
             text        TEXT NOT NULL
-        )",
+        ) STRICT;",
         [],
     )
     .expect("failed to create history table");
@@ -67,13 +67,13 @@ fn init_schema(conn: &SyncConnection) {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS chats (
             chat_id                 INTEGER PRIMARY KEY NOT NULL,
-            is_authorized           BOOLEAN NOT NULL DEFAULT 0,
-            is_admin                BOOLEAN NOT NULL DEFAULT 0,
+            is_authorized           INTEGER NOT NULL DEFAULT 0 CHECK (is_authorized IN (0, 1)),
+            is_admin                INTEGER NOT NULL DEFAULT 0 CHECK (is_admin IN (0, 1)),
             openrouter_api_key      TEXT,
             model_id                TEXT,
             system_prompt           TEXT,
             user_name               TEXT
-        )",
+        ) STRICT;",
         [],
     )
     .expect("failed to create chats table");
